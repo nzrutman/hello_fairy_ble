@@ -1,0 +1,16 @@
+{
+    "domain": "hello_fairy_ble",
+    "name": "Hello Fairy Bluetooth Lights",
+    "bluetooth": [
+        { "local_name": "Hello Fairy-*", "connectable": true }
+    ],
+    "codeowners": ["@nzrutman"],
+    "config_flow": true,
+    "dependencies": ["bluetooth"],
+    "documentation": "",
+    "integration_type": "device",
+    "iot_class": "local_push",
+    "issue_tracker": "",
+    "requirements": ["bleak-retry-connector"],
+    "version": "1.0.0"
+}

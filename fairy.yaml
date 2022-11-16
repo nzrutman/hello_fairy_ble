@@ -1,0 +1,642 @@
+
+# ESP Home initial code
+
+packages:
+  esphome.bluetooth-proxy: github://esphome/firmware/bluetooth-proxy/esp32-generic.yaml@main
+  common: !include common.yaml
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "XXX"
+
+# pins
+# 0 boot mode
+# 2 blue led
+# 34-39 input only
+# 32-39 ADC
+
+# Note: integration LED BLE is provided by the led-ble python library
+# https://github.com/Bluetooth-Devices/led-ble
+# which in turn builds on flux_led
+# https://github.com/Danielhiversen/flux_led/blob/master/flux_led/protocol.py
+# Protocol there seems fairly different than this one.
+
+substitutions:
+  name: "esp32-airy"
+  friendly_name: Airy
+  svcuuid: 49535343-fe7d-4ae5-8fa9-9fafd205e455
+  cmduuid: 49535343-8841-43f4-a8d4-ecbe34729bb3
+  ntfuuid: 49535343-1E4D-4BD9-BA61-23C647249616
+  fairy_mac: 11:11:00:00:00:00  # set to your fairy mac address
+
+globals:
+  - id: fairy_name
+    type: std::string
+    restore_value: no
+  - id: fhsv
+    type: int[3]
+    restore_value: yes
+  - id: acked
+    type: bool
+    restore_value: no
+    initial_value: 'true'
+  - id: deferred_send
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: notify_only
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: delay_counter
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: delay_old
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+#[20:33:29][D][ble_adv:031]:   address: 11:11:00:00:00:00
+#[20:33:29][D][ble_adv:032]:   name: Hello Fairy-40XXXXX
+#[20:33:29][D][ble_adv:033]:   Advertised service UUIDs:
+#[20:33:29][D][ble_adv:035]:     - 49535343-1111-0032-40FD-9FAFD205E455
+#[20:33:29][D][ble_adv:037]:   Advertised service data:
+#[20:33:29][D][ble_adv:041]:   Advertised manufacturer data:
+#[20:33:29][D][ble_adv:043]:     - 0x0504: (length 5)
+# 0x0504 PHYPLUS Inc
+
+esp32_ble_tracker:
+  on_ble_advertise:
+    - mac_address:
+      then:
+        - lambda: |-
+            if (x.get_name().find("Hello Fairy-") != 0)
+              return;
+            if (id(fairy_name) == x.get_name())
+              return;
+            if (x.address_str() == "${fairy_mac}")
+              id(fairy_name) = x.get_name();
+            ESP_LOGD("ble_adv", "New BLE device");
+            ESP_LOGD("ble_adv", "  address: %s", x.address_str().c_str());
+            ESP_LOGD("ble_adv", "  name: %s", x.get_name().c_str());
+            for (auto data : x.get_manufacturer_datas()) {
+                ESP_LOGD("ble_adv", "  manufacturer: %s", data.uuid.to_string().c_str());
+            }
+
+ble_client:
+  - mac_address: ${fairy_mac}
+    id: fairy_cli
+    auto_connect: true
+    on_connect:
+      then:
+        - lambda: |-
+            ESP_LOGD("ble_client_lambda", "Connected to BLE device %s", id(fairy_name).c_str());
+            id(bleconn).publish_state(true);
+    on_disconnect:
+      then:
+        - lambda: |-
+            ESP_LOGD("ble_client_lambda", "Disconnected from BLE device %s", id(fairy_name).c_str());
+            id(bleconn).publish_state(false);
+
+sensor:
+  - platform: ble_client
+    name: notification
+    type: characteristic
+    ble_client_id: fairy_cli
+    service_uuid: ${svcuuid}
+    characteristic_uuid: ${cmduuid}
+    internal: true
+    update_interval: 60s
+    lambda: |-
+      std::string resp = "";
+      char buffer[3];
+      for (int i = 0; i < x.size(); i++) {
+        sprintf(buffer, "%02x", x[i]); 
+        resp += buffer;
+      }
+      // Reading cmd always gets this
+      if (resp != "68656c6c6f00") {
+        ESP_LOGD("cmd", "read %d bytes %s", x.size(), resp.c_str());
+      }
+      return 0.0;
+  - platform: ble_client
+    name: notification
+    type: characteristic
+    ble_client_id: fairy_cli
+    service_uuid: ${svcuuid}
+    characteristic_uuid: ${ntfuuid}
+    notify: true
+    internal: true
+    # polling this uuid doesnt work
+    update_interval: 24h
+    lambda: |-
+      //ESP_LOGD("ntfy", "status notify: %d", x.size());
+      std::string resp = "";
+      char buffer[3];
+      for (int i = 0; i < x.size(); i++) {
+        sprintf(buffer, "%02x", x[i]); 
+        resp += buffer;
+      }
+      if (x.size() == 4) { // ACK aa0200ac, aa0300ad
+        ESP_LOGD("ntfy", "command %d ACK", x[1]);
+        id(acked) = true;
+        return 0.0;
+      }
+      if (x.size() < 12) {
+        ESP_LOGD("ntfy", "unknown response %s", resp.c_str());
+        return 1.0;
+      }
+      // Interesting part after byte 6
+      id(fe_status).publish_state(resp.substr(12));
+      // byte 6 is power state
+      id(fe_power).publish_state(x[6]);
+      if (x[6] == 0) {
+        // Make light entity match reported state
+        id(fe_rgb).turn_off().perform();
+        return (float)x.size();
+      }
+      if (x[7] == 1) { // hsv
+        //c8-9  	hsv color	    xxxx	H 0-359 degrees
+        //c10-11	hsv sat 	    xxxx	0?-1000
+        //c12-13  hsv bright    xxxx	100-1000 by 100's
+        id(fhsv)[0] = x[8] * 256 + x[9];
+        id(fhsv)[1] = (x[10] * 256 + x[11]) / 10;
+        id(fhsv)[2] = (x[12] * 256 + x[13]) / 10;
+        ESP_LOGD("ntfy", "mode=color: HSV(%d,%d,%d)", id(fhsv)[0], id(fhsv)[1], id(fhsv)[2]);
+        // Change the light entity to match reported fairy state;
+        // don't send new settings to fairy
+        id(notify_only) = true;
+        id(hsv2rgb)->execute();
+      } else if (x[7] == 2) { // Preset
+        int preset = x[8];
+        int bright = (x[9] * 256 + x[10]) / 10;
+        ESP_LOGD("ntfy", "mode=preset: p=%d V=%d", preset, bright);
+        id(notify_only) = true;
+        auto call = id(fe_preset).make_call();
+        call.set_value(preset);
+        call.perform();
+      } else {
+        ESP_LOGD("ntfy", "mode=%d unknown", x[7]);
+      }
+      return (float)x.size();
+
+binary_sensor:
+  - platform: template
+    name: ble_connected
+    id: bleconn
+    device_class: connectivity
+    entity_category: diagnostic
+
+text_sensor:
+  - platform: template
+    name: remote
+    icon: mdi:remote-tv
+    id: fe_status
+    on_value:
+      then:
+        - lambda: |-
+            ESP_LOGD("text", "New notify %s", x.c_str());
+
+script:
+  - id: print_state
+    mode: single
+    parameters:
+      tag: string
+    then:
+      - lambda: |-
+          ESP_LOGD("light", "tag=%s s=%f, b=%f rgb(%f,%f,%f)", tag.c_str(), 
+              id(fe_rgb).current_values.get_state(), 
+              id(fe_rgb).current_values.get_brightness(),
+              id(fe_rgb).current_values.get_red(),
+              id(fe_rgb).current_values.get_green(),
+              id(fe_rgb).current_values.get_blue());
+          return;
+
+  - id: hsv2rgb
+    mode: single
+    then:
+      - lambda: |-
+          ESP_LOGD("h2r", "HSV(%d,%d,%d) ->", id(fhsv)[0], id(fhsv)[1], id(fhsv)[2]);
+          ESPHSVColor hsv(id(fhsv)[0]*255/360, id(fhsv)[1]*255/100, id(fhsv)[2]*255/100);
+          Color rgb = hsv.to_rgb();
+          // Transition the light entity in the frontend;
+          ESP_LOGD("h2r", "->RGB(%f,%f,%f)", rgb.r/255.0,rgb.g/255.0,rgb.b/255.0);
+          id(print_state)->execute("h2r_pre");
+          auto call = id(fe_rgb).turn_on();
+          call.set_transition_length(0); // in ms
+          call.set_color_mode(ColorMode::RGB);
+          call.set_brightness(id(fhsv)[2]/100.0);
+          call.set_rgb(rgb.r/255.0,rgb.g/255.0,rgb.b/255.0);
+          call.perform();
+          id(print_state)->execute("h2r_post");
+          return;
+
+  - id: rgb2hsv
+    mode: single
+    parameters:
+      tag: string
+    then:
+      - lambda: |-
+          float r = id(fe_rgb).current_values.get_red();
+          float g = id(fe_rgb).current_values.get_green();
+          float b = id(fe_rgb).current_values.get_blue();
+          ESP_LOGD("r2h", "%s RGB(%f,%f,%f) ->", tag.c_str(), r, g, b);
+          float v = max(r, max(g, b));
+          float n = v - min(r, min(g, b));
+          float h;
+          if (n == 0) {
+            h = 0;
+          } else if (v == r) {
+            h = (g - b) / n;
+          } else if (v == g) {
+            h = 2 + (b - r) / n;
+          } else {
+            h = 4 + (r - g) / n;
+          }
+          if (h < 0) {
+            h += 6;
+          }
+          id(fhsv)[0] = (int)(60 * h);
+          id(fhsv)[1] = (int)(v ? (n / v) * 100 : 0);
+          //id(fhsv)[2] = (int)(v * 100);
+          // light entity has a separate brightness channel
+          id(fhsv)[2] = (int)(id(fe_rgb).current_values.get_brightness() * 100);
+          ESP_LOGD("r2h", "-> HSV(%d,%d,%d)", id(fhsv)[0], id(fhsv)[1], id(fhsv)[2]);
+          return;
+
+  - id: sendhsv
+    mode: single
+    then:
+      - if:
+          # don't send commands if we're just being notified (i.e. ir remote)
+          # or if we're still waiting for a response.
+          condition:
+            lambda: |-
+              //ESP_LOGD("send", "n/o=%d, ack=%d", id(notify_only), id(acked));
+              if (!id(notify_only) && !id(acked)) {
+                // We're not notifying but can't send yet because we're still waiting for the last ack
+                ESP_LOGD("send", "skipping send (previous unacked)");
+                id(deferred_send) = true;
+              }
+              return (!id(notify_only) && id(acked));
+          then:
+            - ble_client.ble_write:
+                id: fairy_cli
+                service_uuid: ${svcuuid}
+                characteristic_uuid: ${cmduuid}
+                # lambda returning an std::vector<uint8_t>
+                value: !lambda |-
+                    // send color on from hsv as (0-360,0-1000,0-1000)
+                    ESP_LOGD("send", "HSV(%d,%d,%d)", id(fhsv)[0], id(fhsv)[1], id(fhsv)[2]);
+                    std::vector<uint8_t> cmd = {0xaa,0x03,0x07,0x01,0xff,0xff,0xff,0xff,0xff,0xff,0xff};
+                    cmd[4] = id(fhsv)[0] / 256;
+                    cmd[5] = id(fhsv)[0] % 256;
+                    cmd[6] = (id(fhsv)[1]*10) / 256;
+                    cmd[7] = (id(fhsv)[1]*10) % 256;
+                    cmd[8] = (id(fhsv)[2]*10) / 256;
+                    cmd[9] = (id(fhsv)[2]*10) % 256;
+                    int csum = 0;
+                    for (int i = 0; i < cmd.size(); i++) {
+                      csum += cmd[i]; 
+                    }
+                    cmd[10] = csum % 256;
+                    std::string msg = "";
+                    char buffer[4];
+                    for (int i = 0; i < cmd.size(); i++) {
+                      sprintf(buffer, "%02x ", cmd[i]); 
+                      msg += buffer;
+                    }
+                    id(acked) = false;
+                    id(deferred_send) = false;
+                    ESP_LOGD("send", "set hsv %s", msg.c_str());
+                    return cmd;
+
+  - id: sendpatt
+    mode: single
+    parameters:
+      pattern: int
+    then:
+      - if:
+          # don't send commands if we're just being notified (i.e. ir remote)
+          # or if we're still waiting for a response.
+          condition:
+            lambda: 'return (!id(notify_only));'
+          then:
+            - ble_client.ble_write:
+                id: fairy_cli
+                service_uuid: ${svcuuid}
+                characteristic_uuid: ${cmduuid}
+                value: !lambda |-
+                  ESP_LOGD("send", "patt (%d)", pattern);
+                  std::vector<uint8_t> cmd = {0xaa,0x03,0x04,0x02,0xff,0xff,0xff,0xff};
+                  cmd[4] = pattern % 256;
+                  cmd[5] = (id(fhsv)[2]*10) / 256;
+                  cmd[6] = (id(fhsv)[2]*10) % 256;
+                  int csum = 0;
+                  for (int i = 0; i < cmd.size(); i++) {
+                    csum += cmd[i]; 
+                  }
+                  cmd[7] = csum % 256;
+                  { // print 
+                    std::string msg = "";
+                    char buffer[4];
+                    for (int i = 0; i < cmd.size(); i++) {
+                      sprintf(buffer, "%02x ", cmd[i]); 
+                      msg += buffer;
+                    }
+                    ESP_LOGD("send", "set patt %s", msg.c_str());
+                  }
+                  id(acked) = false;
+                  return cmd;
+          else:
+            - globals.set:
+                id: notify_only
+                value: 'false'
+
+  # countdown to find the end of transition changes 
+  - id: countdown
+    mode: single
+    then:
+      - lambda: |-
+          id(delay_counter) = 1;
+          id(delay_old) = 1;
+      - delay: 200ms
+      - while:
+          condition:
+            lambda: |-
+              if (id(delay_counter) > id(delay_old)) {
+                id(delay_old) = id(delay_counter);
+                return true;
+              } else {
+                return false;
+              }
+          then:
+            - delay: 200ms
+      - lambda: |-
+          id(delay_counter) = 0;
+          id(delay_old) = 0;
+          return;
+      #- script.execute: 
+      #    id: sendhsv
+      - delay: 100ms      
+      - globals.set:
+          id: notify_only
+          value: 'false'
+      - globals.set:
+          id: acked
+          value: 'true'
+
+# Sends on/off commands to Fairy
+switch:
+  - platform: template
+    name: power
+    id: fe_power
+    device_class: switch
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    internal: true
+    turn_on_action:
+      - ble_client.ble_write:
+          id: fairy_cli
+          service_uuid: ${svcuuid}
+          characteristic_uuid: ${cmduuid}
+          value: [0xaa,0x02,0x01,0x01,0xae]
+    turn_off_action:
+      - ble_client.ble_write:
+          id: fairy_cli
+          service_uuid: ${svcuuid}
+          characteristic_uuid: ${cmduuid}
+          value: [0xaa,0x02,0x01,0x00,0xad]
+
+number:
+  - platform: template
+    name: preset
+    id: fe_preset
+    icon: mdi:car-shift-pattern
+    min_value: 1
+    max_value: 58
+    step: 1
+    optimistic: True
+    restore_value: True
+    set_action:
+      - if:
+          condition:
+            switch.is_off: fe_power
+          then:
+            light.turn_on: fe_rgb
+      - script.execute:
+          id: sendpatt
+          pattern: !lambda 'return x;'
+
+button:
+  - platform: template
+    name: preset_inc
+    id: preset_inc
+    on_press: 
+      then:
+        - number.increment: fe_preset
+  - platform: template
+    name: preset_dec
+    id: preset_dec
+    on_press: 
+      then:
+        - number.decrement: fe_preset
+
+
+# This exposes a rgb light entity on the HA side
+light:
+  - platform: rgb
+    name: string
+    id: fe_rgb
+    icon: mdi:string-lights
+    red: red
+    green: green
+    blue: blue
+    default_transition_length: 0ms
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_state:
+      - logger.log: "Light State Change"
+      - script.execute: 
+          id: print_state
+          tag: "light state"
+      - script.execute: 
+          id: countdown
+    on_turn_on:
+      - logger.log: "Light On"
+      - script.execute: 
+          id: print_state
+          tag: "light pre-on"
+      - switch.turn_on:
+          id: fe_power
+      - script.execute: 
+          id: print_state
+          tag: "light post-on"
+    on_turn_off:
+      - logger.log: "Light Off"
+      - switch.turn_off:
+          id: fe_power
+    effects:
+      - random:
+          name: "Slow Random"
+          transition_length: 0s
+          update_interval: 5s
+      - lambda:
+          name: "Blue White Dissolve"
+          lambda: id(fe_preset).make_call().set_value(41).perform();
+          update_interval: 1h
+      - lambda:
+          name: "Blue Sparkle"
+          lambda: id(fe_preset).make_call().set_value(56).perform();
+          update_interval: 1h
+      - lambda:
+          name: "White Sparkle"
+          lambda: id(fe_preset).make_call().set_value(57).perform();
+          update_interval: 1h
+      - lambda:
+          name: "Blue with Pink Sparkle"
+          lambda: id(fe_preset).make_call().set_value(8).perform();
+          update_interval: 1h
+      - lambda:
+          name: "Fireworks"
+          lambda: id(fe_preset).make_call().set_value(17).perform();
+          update_interval: 1h
+      - lambda:
+          name: "Xmas"
+          lambda: id(fe_preset).make_call().set_value(18).perform();
+          update_interval: 1h
+      - lambda:
+          name: "Candy Cane"
+          lambda: id(fe_preset).make_call().set_value(50).perform();
+          update_interval: 1h
+      - lambda:
+          name: "Halloween"
+          lambda: id(fe_preset).make_call().set_value(20).perform();
+          update_interval: 1h
+      - lambda:
+          name: "Red Gold"
+          lambda: id(fe_preset).make_call().set_value(40).perform();
+          update_interval: 1h
+      - lambda:
+          name: "July 4th"
+          lambda: id(fe_preset).make_call().set_value(39).perform();
+          update_interval: 1h
+      - lambda:
+          name: "Valentine"
+          lambda: id(fe_preset).make_call().set_value(46).perform();
+          update_interval: 1h
+      - lambda:
+          name: "St. Patrick"
+          lambda: id(fe_preset).make_call().set_value(47).perform();
+          update_interval: 1h
+      - lambda:
+          name: "May Day"
+          lambda: id(fe_preset).make_call().set_value(48).perform();
+          update_interval: 1h
+      - lambda:
+          name: "Snow Day"
+          lambda: id(fe_preset).make_call().set_value(54).perform();
+          update_interval: 1h
+
+
+# The values here are set from the HA-side color picker,
+# starting from the previous settings,
+# driven in a sequence over the transition time.
+output:
+  - platform: template
+    id: red
+    type: float
+    write_action:
+      - lambda: |-
+          //ESP_LOGD("outp", "adj red   %f", state);
+          id(delay_counter)+=1;
+          return;
+  - platform: template
+    id: green
+    type: float
+    write_action:
+      - lambda: |-
+          //ESP_LOGD("outp", "adj green %f", state);
+          id(delay_counter)+=1;
+          return;
+  - platform: template
+    id: blue
+    type: float
+    write_action:
+      - lambda: |-
+          //ESP_LOGD("outp", "%d adj blue  %f", id(delay_counter), state);
+          id(delay_counter)+=1;
+          return;
+      - script.execute:
+          id: rgb2hsv
+          tag: 'blue'
+      - if:
+          # don't send commands if we're just being notified (i.e. ir remote)
+          # or if we're still waiting for a response.
+          condition:
+            lambda: 'return (!id(notify_only));'
+          then:
+            - script.execute: 
+                id: sendhsv
+
+
+# Reverse-engineering notes follow...
+# "transparent uart" tx/rx uuids
+# tx: 49535343-1E4D-4BD9-BA61-23C647249616 -- notify
+# broadcasts status update when notify is on, some samples"
+#     b/w  aa01 08 000000 01 02 63 0064 7d
+#     r/g  aa01 08 000000 01 02 12 0064 2c
+#     w    aa01 08 000000 01 02 15 0064 2f 
+#     red  aa01 0b00 0000 0101 0000 03e8 03e8 8e
+#     off  aa01 0b00 0000 0001 0000 03e8 03e8 8d
+#     gn   aa01 0b00 0000 0101 0078 03e8 03e8 06
+#     off                 00                   last bit=previous-1
+#     b    aa01 0b00 0000 0101 00f0 03e8 03e8 7e
+#     y    aa01 0b00 0000 0101 003c 03e8 03e8 ca
+# response for colors:
+# pos 0  1  2  3 4 5  6  7  8 9 1011 1213 14
+#     aa01 0b 000000 01 01 0000 03e8 03e8 8e
+#       |  |  |      |  |  |    |    |    | 
+#       |  |  |      |  |  |    |    |    HSV: checksum
+#       |  |  |      |  |  |    |    HSV: V (2B) 0-1000; 0-100.0%
+#       |  |  |      |  |  |    HSV: S (2B) 0-1000; 0-100.0%
+#       |  |  |      |  |  HSV: H (2B) 0-359deg
+#       |  |  |      |  Mode HSV(01), Preset(02)
+#       |  |  |      off(00)/on(01)
+#       |  |  ? (3B)
+#       |  msg len
+#       msg head
+# response for presets:
+# pos 0  1  2  3 4 5  6  7  8 910  11
+#     aa01 08 000000 01 02 63 0064 7d
+#       |  |  |      |  |  |  |    |  
+#       |  |  |      |  |  |  |    P: checksum
+#       |  |  |      |  |  |  P: V (2B) 0-1000; 0-100.0%
+#       |  |  |      |  |  P: preset #1-52
+#       |  |  |      |  Mode HSV(01), Preset(02)
+#       |  |  |      off(00)/on(01)
+#       |  |  ? (3B)
+#       |  msg len
+#       msg head
+
+
+# rx: 49535343-8841-43f4-a8d4-ecbe34729bb3 -- w,r, w w/o resp
+# on  aa020101ae
+# off aa020100ad
+# response ACK on tx in both cases: aa0200ac
+# bright? color? aa030701001403e8038cbb
+# decoding cmd
+#Byte   Meaning       Value
+#0      prefix        aa
+#1      cmd           02=power, 03=color/preset
+#2      len           01/07
+#p3     off/on        00/01
+#p4     csum          simple sum checksum 
+#c3     color/preset  01/02
+#c4-5   hsv H 0-359
+#c6-7   hsv S 0-1000
+#c8-9   hsv L 100-900 by 100's
+#c10    csum
+#dim gn should be: aa 03 07 01 0078 03e8 03e8 03
+# patt pp should be: aa03 ln 02 pp 03e8 cs

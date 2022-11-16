@@ -1,0 +1,21 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "title": "Hello Fairy BLE Einrichtung",
+                "description": "Wählen Sie eines der gefundenen Hello Fairy Geräte aus.",
+                "data": {
+                    "address": "Gerät"
+                }
+            },
+            "bluetooth_confirm": {
+                "title": "Hello Fairy Gerät Einrichtung",
+                "description": "Hello Fairy Licht einrichten: {name} ({address})"
+            }
+        },
+        "abort": {
+            "already_configured": "Gerät ist bereits konfiguriert",
+            "no_devices_found": "Keine Hello Fairy Geräte gefunden"
+        }
+    }
+}
