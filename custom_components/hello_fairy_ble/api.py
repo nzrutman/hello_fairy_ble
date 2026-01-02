@@ -12,9 +12,11 @@ for communicating with Hello Fairy smart lights, including:
 import asyncio
 import colorsys
 import logging
+import contextlib
+from collections.abc import Callable
 
 import bleak_retry_connector
-from bleak import BleakClient
+from bleak import BleakClient, BleakError
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.device import BLEDevice
 
@@ -35,7 +37,9 @@ _LOGGER = logging.getLogger(__name__)
 class HelloFairyAPI:
     """Hello Fairy BLE API implementation based on protocol from esphome fairy.yaml."""
 
-    def __init__(self, ble_device: BLEDevice, update_callback) -> None:
+    def __init__(
+        self, ble_device: BLEDevice, update_callback: Callable[[], None]
+    ) -> None:
         """Initialize Hello Fairy API.
 
         Args:
@@ -55,26 +59,38 @@ class HelloFairyAPI:
         self.hsv: tuple[int, int, int] | None = None  # H(0-359), S(0-100), V(0-100)
         self.current_preset: int | None = None
         self.mode: int | None = None  # 1=color, 2=preset
+        self.available_effects: list[str] | None = None
 
     @property
     def address(self):
         return self._ble_device.address
 
-    async def _ensure_connected(self):
-        """Ensures BLE connection is established."""
-        if self._client and self._client.is_connected:
-            return
-        await self._connect()
+    async def _ensure_connected(self) -> None:
+        """Ensure we have a connected BLE client."""
+        if self._client is None or not self._client.is_connected:
+            await self._connect()
 
-    async def _connect(self):
+    async def _connect(self) -> None:
         """Connect to Hello Fairy device."""
-        self._client = await bleak_retry_connector.establish_connection(
-            BleakClient, self._ble_device, self.address
-        )
-        # Start notifications for status updates
-        await self._client.start_notify(
-            NOTIFY_CHARACTERISTIC_UUID, self._handle_notification
-        )
+        if self._client and self._client.is_connected:
+            with contextlib.suppress(BleakError, TimeoutError):
+                await self._client.disconnect()
+
+        try:
+            # Use bleak_retry_connector for robust connection handling
+            self._client = await bleak_retry_connector.establish_connection(
+                BleakClient, self._ble_device, self._ble_device.address
+            )
+
+            # Start notifications for status updates
+            await self._client.start_notify(
+                NOTIFY_CHARACTERISTIC_UUID, self._handle_notification
+            )
+        except (BleakError, TimeoutError) as err:
+            self._client = None
+            raise ConnectionError(
+                f"Failed to connect to Hello Fairy device at {self._ble_device.address}: {err}"
+            ) from err
 
     def _calculate_checksum(self, data: list) -> int:
         """Calculate simple sum checksum for Hello Fairy protocol."""
@@ -127,7 +143,7 @@ class HelloFairyAPI:
 
         if not power_state:
             # Device is off
-            await self._update_callback()
+            self._update_callback()
             return
 
         # Parse mode and color/preset data
@@ -160,7 +176,7 @@ class HelloFairyAPI:
 
             _LOGGER.debug("Preset mode - preset: %d, brightness: %d", preset, bright)
 
-        await self._update_callback()
+        self._update_callback()
 
     async def set_power(self, state: bool):
         """Turn Hello Fairy lights on/off."""
@@ -171,10 +187,12 @@ class HelloFairyAPI:
         await self._send_command(command)
 
     async def set_color_hsv(self, h: int, s: int, v: int):
-        """Set color using HSV values
-        h: 0-359 degrees
-        s: 0-100 percent
-        v: 0-100 percent
+        """Set color using HSV values.
+
+        Args:
+            h: 0-359 degrees
+            s: 0-100 percent
+            v: 0-100 percent
         """
         if not self.state:
             await self.set_power(True)
@@ -265,3 +283,14 @@ class HelloFairyAPI:
     def get_available_effects(self) -> list:
         """Get list of available effects."""
         return list(EFFECT_PRESETS.keys())
+
+    async def disconnect(self) -> None:
+        """Disconnect from the device."""
+        if self._client and self._client.is_connected:
+            try:
+                await self._client.stop_notify(NOTIFY_CHARACTERISTIC_UUID)
+                await self._client.disconnect()
+            except Exception:  # Ignore in cleanup
+                pass
+            finally:
+                self._client = None

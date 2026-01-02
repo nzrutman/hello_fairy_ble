@@ -7,7 +7,7 @@ from datetime import timedelta
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .api import HelloFairyAPI
@@ -53,11 +53,29 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
             name=f"{DOMAIN} ({config_entry.unique_id})",
             # Hello Fairy pushes data via notifications, so use longer interval
             update_interval=timedelta(seconds=60),
-            config_entry=config_entry,  # Pass config_entry - it's accepted and recommended
+            config_entry=config_entry,
+        )
+
+    @callback
+    def _async_push_data(self) -> None:
+        """Handle pushed data from device notifications."""
+        # This callback is triggered when the device pushes new data
+        # It should trigger a coordinator refresh
+        self.async_set_updated_data(
+            HelloFairyApiData(
+                state=self._api.state,
+                brightness=self._api.brightness,
+                color=self._api.color,
+                hsv=self._api.hsv,
+                current_preset=self._api.current_preset,
+                mode=self._api.mode,
+                available_effects=self._api.available_effects,
+            )
         )
 
     async def _async_update_data(self) -> HelloFairyApiData:
         """Fetch data from API endpoint."""
+        # This method handles periodic updates when push notifications aren't received
         return HelloFairyApiData(
             state=self._api.state,
             brightness=self._api.brightness,
