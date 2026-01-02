@@ -59,7 +59,7 @@ class HelloFairyAPI:
         self.hsv: tuple[int, int, int] | None = None  # H(0-359), S(0-100), V(0-100)
         self.current_preset: int | None = None
         self.mode: int | None = None  # 1=color, 2=preset
-        self.available_effects: list[str] | None = None
+        self.available_effects = list(EFFECT_PRESETS.keys())
 
     @property
     def address(self):
@@ -119,7 +119,7 @@ class HelloFairyAPI:
             elapsed += 0.1
 
         if not self._ack_received:
-            _LOGGER.warning("No ACK received for command after %s seconds", timeout)
+            raise TimeoutError(f"No ACK received for command after {timeout} seconds")
 
     async def _handle_notification(
         self, characteristic: BleakGATTCharacteristic, data: bytearray
@@ -186,6 +186,16 @@ class HelloFairyAPI:
         command = [CMD_PREFIX, CMD_POWER, 0x01, 0x01 if state else 0x00]
         await self._send_command(command)
 
+        # Update state immediately after successful ACK
+        self.state = state
+        if not state:
+            # If turning off, clear color/brightness state
+            self.brightness = None
+            self.color = None
+            self.hsv = None
+            self.current_preset = None
+            self.mode = None
+
     async def set_color_hsv(self, h: int, s: int, v: int):
         """Set color using HSV values.
 
@@ -217,6 +227,15 @@ class HelloFairyAPI:
         ]
 
         await self._send_command(command)
+
+        # Update state immediately after successful ACK
+        self.hsv = (h, s, v)
+        self.brightness = v
+        self.mode = MODE_COLOR
+        self.current_preset = None
+        # Convert HSV to RGB for Home Assistant
+        r, g, b = colorsys.hsv_to_rgb(h / 360, s / 100, v / 100)
+        self.color = (int(r * 255), int(g * 255), int(b * 255))
 
     async def set_color_rgb(self, r: int, g: int, b: int):
         """Set color using RGB values (0-255)."""
@@ -265,6 +284,14 @@ class HelloFairyAPI:
         ]
 
         await self._send_command(command)
+
+        # Update state immediately after successful ACK
+        self.current_preset = preset
+        self.brightness = brightness
+        self.mode = MODE_PRESET
+        # Clear color state when in preset mode
+        self.color = None
+        self.hsv = None
 
     async def set_effect(self, effect_name: str):
         """Set effect by name."""
