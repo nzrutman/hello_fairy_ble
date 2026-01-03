@@ -52,7 +52,7 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
             _LOGGER,
             name=f"{DOMAIN} ({config_entry.unique_id})",
             # Hello Fairy pushes data via notifications, so use longer interval
-            update_interval=timedelta(seconds=60),
+            update_interval=timedelta(seconds=600),
             config_entry=config_entry,
         )
 
