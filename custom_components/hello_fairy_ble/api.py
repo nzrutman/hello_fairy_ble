@@ -130,6 +130,8 @@ class HelloFairyAPI:
         if len(data) == 4:  # ACK2 or ACK3
             _LOGGER.debug("Received ACK for command %d", data[1])
             self._ack_received = True
+            # Tell coordinator to update state after ACK
+            self._update_callback()
             return
 
         if len(data) < 12:
