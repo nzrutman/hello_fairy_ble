@@ -4,23 +4,16 @@ This custom integration allows you to control Hello Fairy Bluetooth LED string l
 
 ## Features
 
+- **ConfigFlow**: Automatically detect Hello Fairy bluetooth string lights.
 - **Full RGB Color Control**: Set any color using RGB values
 - **Brightness Control**: Adjust brightness from 0-100%
-- **Effect Support**: Access to 14 built-in animated effects including:
-  - Blue White Dissolve
-  - Blue Sparkle
-  - White Sparkle
-  - Blue with Pink Sparkle
-  - Fireworks
-  - Christmas themes (Xmas, Candy Cane)
-  - Halloween
-  - Holiday themes (Valentine, St. Patrick, July 4th, etc.)
-- **Real-time Status**: Automatically syncs with device state changes (including remote control)
+- **Effect Support**: Listed 14 of my favorites of the ~58 effects options
+- **Remote Status**: Automatically syncs with device state changes from remote control. Hopefully.
 - **Bluetooth Low Energy**: Efficient BLE communication
 
 ## Supported Devices
 
-This integration works with Hello Fairy Bluetooth LED string lights that advertise with the name pattern `Hello Fairy-*`. The protocol is based on the ESPHome configuration found in `fairy.yaml`.
+This integration works with Hello Fairy Bluetooth LED string lights that advertise with the name pattern `Hello Fairy-*`.  These used to be sold directly under the "Hello Fairy" brand; now I seem to find them under different names such as "Minetom". I'm not sure if the bluetooth identifier has changed as well, but hopefully these will be autodetected as well. If your Bluetooth string lights are controlled via the Hello Fairy app, they will likely work with this integration.
 
 ### Protocol Details
 
@@ -39,15 +32,6 @@ This integration works with Hello Fairy Bluetooth LED string lights that adverti
 ## Configuration
 
 The integration uses Bluetooth discovery to automatically find Hello Fairy devices. No manual configuration is required if your device is within Bluetooth range.
-
-### Manual Configuration
-
-If automatic discovery doesn't work:
-
-1. Go to Settings > Devices & Services > Add Integration
-2. Search for "Hello Fairy Bluetooth Lights"
-3. Select your device from the list of discovered devices
-4. Complete the setup
 
 ## Usage
 
@@ -79,7 +63,9 @@ The integration includes the following preset effects:
 
 ## Technical Implementation
 
-The integration implements the Hello Fairy protocol as documented in the ESPHome configuration:
+This integration implements the Hello Fairy protocol I initially worked out for an [ESPHome project](https://community.home-assistant.io/t/control-hello-fairy-ble-string-lights-with-esphome/818595). My conclusion there is that really I should have written a Home Assistant *Integration* rather than custom ESP32 yaml; not only is all the send/ack/notify stuff already mostly handled in the HA libraries, but also you get to use any/all of your Bluetooth proxies (e.g. ESP32's configured with esphome.bluetooth-proxy) automatically, instead of hard-coding a specific MAC into a specific ESP.
+
+So, a year later, here is that integration (my first).
 
 ### Command Format
 
@@ -105,7 +91,8 @@ Commands use the following structure:
 
 ### Status Notifications
 
-The device sends status updates via BLE notifications when state changes:
+The device sends status updates via BLE notifications when state changes from the remote. Maybe also in response to some query command that I haven't discovered yet.
+
 - Power state (byte 6): `00` = off, `01` = on  
 - Mode (byte 7): `01` = color mode, `02` = preset mode
 - Color data (bytes 8-13): HSV values when in color mode
@@ -115,17 +102,21 @@ The device sends status updates via BLE notifications when state changes:
 
 ### Device Not Discovered
 
-1. Ensure the Hello Fairy lights are powered on and in pairing mode
-2. Check that Bluetooth is enabled on your Home Assistant host
-3. Verify the device name starts with "Hello Fairy-"
-4. Try restarting the Bluetooth service or Home Assistant
+1. Ensure the Hello Fairy lights are powered on and *not already connected to your phone app*
+2. Try power cycling the Hello Fairy lights
+3. Check that Bluetooth is enabled on your Home Assistant host or Bluetooth proxies
+4. Verify the device name starts with "Hello Fairy-" (in the logs)
+5. Try turning on logging and restarting Home Assistant:
 
-### Connection Issues
-
-1. Ensure the device is within Bluetooth range
-2. Check for interference from other Bluetooth devices
-3. Try power cycling the Hello Fairy lights
-4. Restart the integration from Settings > Devices & Services
+```console
+logger:
+  default: warn
+  logs:
+    custom_components.hello_fairy_ble: debug
+    #   for even more debug info, turn on
+    # bleak: debug
+    # homeassistant.components.bluetooth: debug
+```
 
 ### Effect Not Working
 
@@ -135,7 +126,7 @@ The device sends status updates via BLE notifications when state changes:
 
 ## Contributing
 
-This integration is based on the protocol reverse-engineering work found in the `fairy.yaml` ESPHome configuration. Contributions and improvements are welcome!
+This integration is based on the protocol reverse-engineering work originally from my [`fairy.yaml` ESPHome configuration](https://community.home-assistant.io/t/control-hello-fairy-ble-string-lights-with-esphome). Contributions and improvements are welcome!
 
 ## License
 
