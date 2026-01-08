@@ -15,12 +15,6 @@ This custom integration allows you to control Hello Fairy Bluetooth LED string l
 
 This integration works with Hello Fairy Bluetooth LED string lights that advertise with the name pattern `Hello Fairy-*`.  These used to be sold directly under the "Hello Fairy" brand; now I seem to find them under different names such as "Minetom". I'm not sure if the bluetooth identifier has changed as well, but hopefully these will be autodetected as well. If your Bluetooth string lights are controlled via the Hello Fairy app, they will likely work with this integration.
 
-### Protocol Details
-
-- **Service UUID**: `49535343-fe7d-4ae5-8fa9-9fafd205e455`
-- **Command UUID**: `49535343-8841-43f4-a8d4-ecbe34729bb3`
-- **Notify UUID**: `49535343-1E4D-4BD9-BA61-23C647249616`
-
 ## Installation
 
 1. Copy the `custom_components/hello_fairy_ble` folder to your Home Assistant `config/custom_components/` directory
@@ -41,10 +35,11 @@ Once configured, your Hello Fairy lights will appear as a light entity in Home A
 - **RGB Color**: Set custom colors using the color picker
 - **Brightness**: Adjust brightness with the brightness slider
 - **Effects**: Choose from 14 built-in effects in the effect dropdown
+- **Preset**: There is also a separate numerical control to select any of the full range of effects by number
 
 ### Available Effects
 
-The integration includes the following preset effects:
+The integration includes the following preset effects in the light effects dropdown. You can also use the separate 'preset' control to select any of the other presets.
 
 - Blue White Dissolve
 - Blue Sparkle  
@@ -67,16 +62,25 @@ This integration implements the Hello Fairy protocol I initially worked out for 
 
 So, a year later, here is that integration (my first).
 
+### Protocol Details
+
+- **Service UUID**: `49535343-fe7d-4ae5-8fa9-9fafd205e455`
+- **Command UUID**: `49535343-8841-43f4-a8d4-ecbe34729bb3`
+- **Notify UUID**: `49535343-1E4D-4BD9-BA61-23C647249616`
+
 ### Command Format
 
 Commands use the following structure:
+
 - `0xAA` (prefix) + command type + length + data + checksum
 
 ### Power Commands
+
 - **On**: `AA 02 01 01 AE`
 - **Off**: `AA 02 01 00 AD`
 
 ### Color Commands
+
 - **HSV Color**: `AA 03 07 01 HHHH SSSS VVVV CC`
   - H: Hue (0-359 degrees, 2 bytes)
   - S: Saturation (0-1000, 2 bytes) 
@@ -84,6 +88,7 @@ Commands use the following structure:
   - CC: Checksum
 
 ### Preset Commands  
+
 - **Effect**: `AA 03 04 02 PP VVVV CC`
   - PP: Preset number (1-58)
   - VVVV: Brightness (0-1000, 2 bytes)
