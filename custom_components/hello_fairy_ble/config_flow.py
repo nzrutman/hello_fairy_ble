@@ -17,7 +17,7 @@ from .const import DOMAIN, DISCOVERY_NAMES
 
 class HelloFairyConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle Hello Fairy config flow."""
-    
+
     VERSION = 1
 
     def __init__(self) -> None:
@@ -31,7 +31,7 @@ class HelloFairyConfigFlow(ConfigFlow, domain=DOMAIN):
         """Handle the bluetooth discovery step."""
         await self.async_set_unique_id(discovery_info.address)
         self._abort_if_unique_id_configured()
-        
+
         self._discovery_info = discovery_info
         return await self.async_step_bluetooth_confirm()
 
@@ -59,7 +59,7 @@ class HelloFairyConfigFlow(ConfigFlow, domain=DOMAIN):
         device_list = {}
         for address, discovery_info in self._discovered_devices.items():
             device_list[address] = discovery_info.name
-    
+
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema(
@@ -73,10 +73,10 @@ class HelloFairyConfigFlow(ConfigFlow, domain=DOMAIN):
         """Confirm discovery."""
         assert self._discovery_info is not None
         discovery_info = self._discovery_info
-        
+
         if user_input is not None:
             return self.async_create_entry(
-                title=discovery_info.name, 
+                title=discovery_info.name,
                 data={
                     CONF_ADDRESS: discovery_info.address.upper(),
                     CONF_NAME: discovery_info.name,
