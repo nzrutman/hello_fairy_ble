@@ -17,5 +17,12 @@
             "already_configured": "Device is already configured",
             "no_devices_found": "No Hello Fairy devices found"
         }
+    },
+    "entity": {
+        "number": {
+            "preset": {
+                "name": "Preset"
+            }
+        }
     }
 }

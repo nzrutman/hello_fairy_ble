@@ -15,9 +15,10 @@ from .coordinator import HelloFairyCoordinator
 from .const import DOMAIN
 
 import logging
-_LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.LIGHT]
+_LOGGER = logging.getLogger(__name__)
+PLATFORMS: list[Platform] = [Platform.LIGHT, Platform.NUMBER]
+
 
 @dataclass
 class RuntimeData:
@@ -25,6 +26,7 @@ class RuntimeData:
 
     coordinator: HelloFairyCoordinator
     cancel_update_listener: Callable
+
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Set up Hello Fairy integration from a config entry."""
@@ -57,10 +59,12 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     return True
 
+
 async def _async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry):
     """Handle config options update."""
     # Reload the integration when the options change.
     await hass.config_entries.async_reload(config_entry.entry_id)
+
 
 async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Unload a config entry."""
