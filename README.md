@@ -22,17 +22,24 @@ These lights are controlled via Bluetooth Low Energy. Your Home Assistance insta
 
 ## Installation
 
-Until this integration is included in HACS, you must manually install:
+### 1. Install
 
-1. Copy the `custom_components/hello_fairy_ble` folder to your Home Assistant `config/custom_components/` directory
-2. Restart Home Assistant
-3. Go to Settings > Devices & Services > Add Integration
-4. Search for "Hello Fairy" and select it
-5. Your Hello Fairy lights should be automatically discovered via Bluetooth
+Choose one of the following methods to install the integration:
 
-## Configuration
+A. Install via HACS (Recommended)
+   - Open Home Assistant and click on **HACS** in the sidebar.
+   - Search for **"Hello Fairy"** and select it.
+   - Click **"Download"**.
 
-The integration uses [Bluetooth discovery](https://www.home-assistant.io/integrations/bluetooth/) to automatically find Hello Fairy devices. No manual configuration is required if your device is within Bluetooth range.
+B. Install manually
+   - Copy the `custom_components/hello_fairy_ble` folder to your Home Assistant `config/custom_components/` directory
+
+### 2. Configure
+   - **Restart Home Assistant**.
+   - After restarting, navigate to **Settings > Devices & Services**.
+   - Click **"Add Integration"**, find **"Hello Fairy Bluetooth Lights"**, and follow the prompts.
+
+The integration uses [Bluetooth discovery](https://www.home-assistant.io/integrations/bluetooth/) to automatically find Hello Fairy devices within Bluetooth range.
 
 ## Usage
 
