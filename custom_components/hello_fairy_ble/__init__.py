@@ -3,12 +3,9 @@ from __future__ import annotations
 from enum import IntEnum
 from dataclasses import dataclass
 from typing import Callable
-from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.const import CONF_ADDRESS
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .coordinator import HelloFairyCoordinator
@@ -31,14 +28,10 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     hass.data.setdefault(DOMAIN, {})
 
-    # Look for Hello Fairy device
-    device_address = config_entry.data[CONF_ADDRESS]
-    if not bluetooth.async_ble_device_from_address(hass, device_address, False):
-        raise ConfigEntryNotReady(
-            f"Could not find Hello Fairy BLE device with address {device_address}"
-        )
-
-    # Initialize the coordinator that manages data updates from the API
+    # Initialize the coordinator that manages data updates from the API. The
+    # BLE device may not be visible yet (e.g. right after HA startup); the
+    # coordinator watches for it via a bluetooth callback and recovers once
+    # it's seen, so we don't need to fail config entry setup here.
     coordinator = HelloFairyCoordinator(hass, config_entry)
 
     # Perform an initial data load from API

@@ -38,12 +38,12 @@ class HelloFairyAPI:
     """Hello Fairy BLE API implementation based on protocol from esphome fairy.yaml."""
 
     def __init__(
-        self, ble_device: BLEDevice, update_callback: Callable[[], None]
+        self, ble_device: BLEDevice | None, update_callback: Callable[[], None]
     ) -> None:
         """Initialize Hello Fairy API.
 
         Args:
-            ble_device: The BLE device to connect to
+            ble_device: The BLE device to connect to, if already discovered
             update_callback: Callback function for device state updates
         """
         self._ble_device = ble_device
@@ -63,10 +63,16 @@ class HelloFairyAPI:
 
     @property
     def address(self):
-        return self._ble_device.address
+        return self._ble_device.address if self._ble_device else None
+
+    def set_ble_device(self, ble_device: BLEDevice) -> None:
+        """Update the BLE device once it has been (re)discovered."""
+        self._ble_device = ble_device
 
     async def _ensure_connected(self) -> None:
         """Ensure we have a connected BLE client."""
+        if self._ble_device is None:
+            raise ConnectionError("Hello Fairy device has not been discovered yet")
         if self._client is None or not self._client.is_connected:
             await self._connect()
 

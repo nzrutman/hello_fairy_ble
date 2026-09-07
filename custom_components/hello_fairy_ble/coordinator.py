@@ -39,11 +39,11 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
         self.device_name = config_entry.data[CONF_NAME]
         self.device_address = config_entry.data[CONF_ADDRESS]
 
-        # Get connection to bluetooth device
+        # Get connection to bluetooth device, if it's already visible. It's fine
+        # if it isn't yet - _async_device_discovered will pick it up later.
         ble_device = bluetooth.async_ble_device_from_address(
             hass, self.device_address, connectable=False
         )
-        assert ble_device
         self._api = HelloFairyAPI(ble_device, self._async_push_data)
 
         # Initialize DataUpdateCoordinator
@@ -55,6 +55,27 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
             update_interval=timedelta(seconds=600),
             config_entry=config_entry,
         )
+
+        # Keep watching for the device in case it wasn't available yet (e.g.
+        # right after Home Assistant startup) or it drops off and comes back.
+        config_entry.async_on_unload(
+            bluetooth.async_register_callback(
+                hass,
+                self._async_device_discovered,
+                bluetooth.BluetoothCallbackMatcher(address=self.device_address),
+                bluetooth.BluetoothScanningMode.PASSIVE,
+            )
+        )
+
+    @callback
+    def _async_device_discovered(
+        self,
+        service_info: bluetooth.BluetoothServiceInfoBleak,
+        change: bluetooth.BluetoothChange,
+    ) -> None:
+        """Handle the Hello Fairy device becoming available."""
+        self._api.set_ble_device(service_info.device)
+        self.hass.async_create_task(self.async_request_refresh())
 
     @callback
     def _async_push_data(self) -> None:
