@@ -130,3 +130,8 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
     async def set_effect(self, effect_name: str):
         """Set effect by name."""
         await self._api.set_effect(effect_name)
+
+    @property
+    def device_discovered(self) -> bool:
+        """Return True if the BLE device has been seen."""
+        return self._api.is_discovered

@@ -71,6 +71,11 @@ class HelloFairyLight(CoordinatorEntity[HelloFairyCoordinator], LightEntity):
         self.async_write_ha_state()
 
     @property
+    def available(self) -> bool:
+        """Return True if the BLE device has been discovered."""
+        return super().available and self.coordinator.device_discovered
+
+    @property
     def brightness(self) -> int | None:
         """Return the current brightness (0-255)."""
         if self.coordinator.data.brightness is not None:

@@ -65,6 +65,11 @@ class HelloFairyAPI:
     def address(self):
         return self._ble_device.address if self._ble_device else None
 
+    @property
+    def is_discovered(self) -> bool:
+        """Return True if the BLE device has been seen."""
+        return self._ble_device is not None
+
     def set_ble_device(self, ble_device: BLEDevice) -> None:
         """Update the BLE device once it has been (re)discovered."""
         self._ble_device = ble_device
