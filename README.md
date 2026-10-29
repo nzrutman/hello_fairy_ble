@@ -18,6 +18,8 @@ This integration works with Hello Fairy Bluetooth LED string lights that adverti
 
 ## Requirements
 
+Version 2.0 requires Home Assistant **2026.9.3 or newer**, for both string lights and curtains.
+
 These lights are controlled via Bluetooth Low Energy. Your Home Assistance instance needs a way to send Bluetooth signals. See the [Bluetooth integration](https://www.home-assistant.io/integrations/bluetooth/).
 
 ## Installation
@@ -56,7 +58,7 @@ Once configured, your Hello Fairy lights will appear as a light entity in Home A
 The integration includes the following preset effects in the light effects dropdown. You can also use the separate 'preset' control to select any of the other presets.
 
 - Blue White Dissolve
-- Blue Sparkle  
+- Blue Sparkle
 - White Sparkle
 - Blue with Pink Sparkle
 - Fireworks
@@ -99,11 +101,11 @@ Commands use the following structure:
 
 - **HSV Color**: `AA 03 07 01 HHHH SSSS VVVV CC`
   - H: Hue (0-359 degrees, 2 bytes)
-  - S: Saturation (0-1000, 2 bytes) 
+  - S: Saturation (0-1000, 2 bytes)
   - V: Value/Brightness (0-1000, 2 bytes)
   - CC: Checksum
 
-### Preset Commands  
+### Preset Commands
 
 - **Effect**: `AA 03 04 02 PP VVVV CC`
   - PP: Preset number (1-58)
@@ -112,12 +114,34 @@ Commands use the following structure:
 
 ### Status Notifications
 
-The device sends status updates via BLE notifications when state changes from the remote. Maybe also in response to some query command that I haven't discovered yet.
+The device sends status updates via BLE notifications when state changes from the remote. Curtain Studio can also explicitly request status using command `01`; reported fields depend on the device profile.
 
-- Power state (byte 6): `00` = off, `01` = on  
+- Power state (byte 6): `00` = off, `01` = on
 - Mode (byte 7): `01` = color mode, `02` = preset mode
 - Color data (bytes 8-13): HSV values when in color mode
 - Preset data (bytes 8-10): Preset number and brightness when in preset mode
+
+## Version 2.0: Adds Curtain Studio support
+
+Version 2.0 includes Curtain Studio inside this integration for supported 400-LED, 20×20 curtains. The string-light controls described above remain available. Other lights may appear in Studio, but unsupported DIY operations are rejected without disabling their ordinary controls.
+
+Studio provides image import, painting, patterns, text, saved designs, multi-curtain layouts, playlists, favorites, clock/message displays, orientation corrections and library backup/import. Supported curtains can use native two-picture animation, movement, speed and brightness. Additional native music, clock, countdown and schedule controls require the documented device profile and capability checks.
+
+### Installation and compatibility
+
+Version 2.0 requires Home Assistant **2026.9.3 or newer**. Back up the existing integration folder, install the complete `custom_components/hello_fairy_ble` folder, restart HA and refresh the browser. Keep existing configured devices. Open **Curtain Studio** in the sidebar as an administrator; the header should show **2.0.0**. This PR is awaiting merge/release; HACS will offer it after the maintainer publishes it.
+
+DIY uploads require verified ATT MTU ≥245 and at least 242 bytes per write. The tested ESPHome 2026.9.1 proxy reported MTU 512 and capacity 509 after fresh verification. The integration reproduces the captured Android six-packet transfer and refuses unsupported capacity; it does not probe oversized writes or fall back to many tiny image packets. Standard light controls remain available when DIY is unsupported.
+
+Commands are serialized. Connection setup uses bounded retries, but uncertain writes and partial image transfers are not replayed. A valid manual request stops background Studio playback; invalid payloads or missing targets leave that playback running. On failure, check the lights before deliberately sending again.
+
+### Guides and limits
+
+See [STUDIO_GUIDE.md](STUDIO_GUIDE.md) for all controls, automation actions and backups, [PROTOCOL.md](PROTOCOL.md) and [NATIVE_EVIDENCE.md](NATIVE_EVIDENCE.md) for protocol evidence, and [VALIDATION.md](VALIDATION.md) for tests and hardware reports.
+
+Device reports are separate from upload history and local previews. Full pixel readback and synchronized cross-curtain movement are unproven. Native font uploads, extra device storage, true firmware pause and scene loops remain unavailable. Native schedules use a fixed offset and need review after timezone/DST changes. These limits do not affect the ordinary string-light controls.
+
+For troubleshooting, close the phone app if it holds the Bluetooth connection and use the debug logging configuration below. If Studio is missing, check that HA loaded the integration and that the account is an administrator. For rollback, restore the backed-up integration folder and restart HA without deleting configured devices.
 
 ## Troubleshooting
 

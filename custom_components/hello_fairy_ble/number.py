@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
@@ -14,6 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import RuntimeData
 from .const import DOMAIN
 from .coordinator import HelloFairyCoordinator
+from .library import async_stop_playlist
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Hello Fairy number entities from config entry."""
-    data: RuntimeData = hass.data[DOMAIN][config_entry.entry_id]
+    data: RuntimeData = config_entry.runtime_data
     coordinator = data.coordinator
 
     async_add_entities([HelloFairyPresetNumber(coordinator)])
@@ -78,12 +78,11 @@ class HelloFairyPresetNumber(CoordinatorEntity[HelloFairyCoordinator], NumberEnt
 
         # Validate preset range
         if preset_num < 1 or preset_num > 58:
-            _LOGGER.warning(
-                "Invalid preset number %d, must be between 1 and 58", preset_num
-            )
+            _LOGGER.warning("Invalid preset number %d, must be between 1 and 58", preset_num)
             return
 
         try:
+            await async_stop_playlist(self.hass)
             await self.coordinator.set_preset(preset_num)
         except Exception as err:
             _LOGGER.error("Failed to set preset to %d: %s", preset_num, err)

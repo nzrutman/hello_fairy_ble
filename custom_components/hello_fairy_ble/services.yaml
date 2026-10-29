@@ -1,0 +1,336 @@
+start_playlist:
+  name: Start saved Studio playlist
+  description: >-
+    Play the playlist saved in Curtain Studio on these curtains in left-to-right order.
+    Each design must match the selected curtain count. Timers start after upload.
+    Playback runs in Home Assistant and stops on the first transfer failure.
+  fields:
+    playlist_id:
+      name: Saved playlist ID
+      description: Optional ID from Studio's automation details. Omit to use the selected playlist.
+      selector:
+        text:
+    addresses:
+      name: Curtain addresses
+      description: List of configured Bluetooth addresses, ordered left to right.
+      required: true
+      example: ["AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"]
+      selector:
+        object:
+
+stop_playlist:
+  name: Stop Studio playlist
+  description: >-
+    Finish the current curtain upload, then stop further playlist sends.
+    The last design and its native movement remain on the curtain.
+
+enter_draw_mode:
+  name: Enter draw mode
+  description: Put one Hello Fairy 20x20 curtain into DIY drawing mode.
+  fields:
+    address:
+      name: Bluetooth address
+      description: Bluetooth MAC/address of the configured Hello Fairy curtain.
+      required: true
+      example: "AA:BB:CC:DD:EE:FF"
+      selector:
+        text:
+
+clear_matrix:
+  name: Clear matrix
+  description: Clear all 400 pixels on one Hello Fairy curtain.
+  fields:
+    address:
+      name: Bluetooth address
+      required: true
+      example: "AA:BB:CC:DD:EE:FF"
+      selector:
+        text:
+
+set_pixel:
+  name: Set pixel
+  description: Set one pixel on the 20x20 DIY matrix.
+  fields:
+    address:
+      name: Bluetooth address
+      required: true
+      example: "AA:BB:CC:DD:EE:FF"
+      selector:
+        text:
+    x:
+      name: X
+      description: Horizontal coordinate, 0-19.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 19
+          step: 1
+          mode: box
+    y:
+      name: Y
+      description: Vertical coordinate, 0-19.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 19
+          step: 1
+          mode: box
+    rgb:
+      name: RGB
+      description: RGB list such as [255, 0, 0]. Use either rgb or color_byte, not both.
+      required: false
+      example: [255, 0, 0]
+    color_byte:
+      name: Raw DIY color byte
+      description: Raw Hello Fairy DIY color byte 0-180, 254 or 255. 254=off, 255=white.
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 255
+          step: 1
+          mode: box
+
+set_frame:
+  name: Set 20x20 frame
+  description: Upload a complete 20x20 row-major DIY frame to one curtain.
+  fields:
+    address:
+      name: Bluetooth address
+      required: true
+      selector:
+        text:
+    pixels:
+      name: Pixels
+      description: >-
+        Exactly 400 row-major colors. Each item may be a raw 0-180, 254 or 255 DIY byte,
+        #RRGGBB, [r,g,b], or a basic color name.
+      required: true
+
+set_virtual_frame:
+  name: Set virtual multi-curtain frame
+  description: >-
+    Treat multiple 20x20 curtains as one 40/60/80... x20 canvas and upload
+    the correct slice to each curtain in order, stopping at the first failure.
+  fields:
+    addresses:
+      name: Curtain addresses
+      description: Bluetooth addresses ordered physically from left to right.
+      required: true
+      example:
+        - "AA:BB:CC:DD:EE:01"
+        - "AA:BB:CC:DD:EE:02"
+        - "AA:BB:CC:DD:EE:03"
+        - "AA:BB:CC:DD:EE:04"
+    pixels:
+      name: Pixels
+      description: >-
+        Row-major colors for the full virtual canvas. Four curtains require
+        1600 values for an 80x20 image.
+      required: true
+
+test_pattern:
+  name: Test matrix orientation
+  description: >-
+    Draw a white border and colored corners so we can verify the physical
+    x/y orientation to check the physical orientation.
+  fields:
+    address:
+      name: Bluetooth address
+      required: true
+      selector:
+        text:
+
+set_two_picture_animation:
+  name: Two-picture animation (experimental)
+  description: Upload exactly two complete pictures using the captured phone sequence. Native playback and cross-curtain timing need physical confirmation. No automatic replay.
+  fields:
+    address:
+      name: Curtain address
+      required: true
+      selector:
+        text:
+    frames:
+      name: Two pictures
+      description: Exactly two lists of 400 row-major colors each.
+      required: true
+    experimental:
+      name: Enable experimental playback
+      required: true
+      selector:
+        boolean:
+
+set_diy_playback:
+  name: Set DIY movement and speed
+  description: Apply APK-derived native playback controls to the last design sent during this HA run. Does not re-upload images.
+  fields:
+    address:
+      name: Curtain address
+      required: true
+      selector:
+        text:
+    kind:
+      name: Design type
+      required: true
+      selector:
+        select:
+          options: [picture, animation]
+    movement:
+      name: Movement
+      required: true
+      description: Picture supports still, up, down, left, right, blink, breathe and loop_up/down/left/right. Animation supports blink or breathe.
+      selector:
+        text:
+    speed:
+      name: Speed
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+    brightness:
+      name: Brightness
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+
+show_design:
+  name: Show saved design
+  description: Recall a saved design using ordered curtain addresses or its saved favorite targets. Finishes current playback upload before takeover.
+  fields:
+    design_id:
+      name: Design ID
+      required: true
+      selector:
+        text:
+    addresses:
+      name: Curtain addresses, left to right
+      selector:
+        object:
+playlist_next:
+  name: Next playlist design
+  description: Queue the next playlist design, finishing any current curtain upload first.
+playlist_previous:
+  name: Previous playlist design
+  description: Queue the previous playlist design, finishing any current curtain upload first.
+show_message:
+  name: Show a message
+  description: Render uppercase text and an optional icon as complete image pages. Duration applies to each page after upload. Stop playback to interrupt; no pixel readback is available.
+  fields:
+    addresses:
+      name: Curtain addresses, left to right
+      required: true
+      selector:
+        object:
+    text:
+      name: Message, up to 160 characters (may be empty for an icon)
+      selector:
+        text:
+    color_byte:
+      name: Text color byte (0–180, 254 off, 255 white)
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+    background_byte:
+      name: Background color byte (0–180, 254 off, 255 white)
+      default: 254
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+    icon:
+      name: Icon
+      default: none
+      selector:
+        select:
+          options: [none, bell, heart, door]
+    duration:
+      name: Seconds per page after upload
+      default: 10
+      selector:
+        number:
+          min: 10
+          max: 86400
+          mode: box
+    restore_design_id:
+      name: Saved design to show after natural completion
+      selector:
+        text:
+start_clock:
+  name: Start curtain clock
+  description: Display a clock in Home Assistant local time using full uploads, at most once per minute. Stop with Stop playlist. The 12-hour format has no AM/PM suffix.
+  fields:
+    addresses:
+      name: Curtain addresses, left to right
+      required: true
+      selector:
+        object:
+    format:
+      name: Time format
+      default: 24h
+      selector:
+        select:
+          options: [24h, 12h]
+    color_byte:
+      name: Text color byte (0–180, 254 off, 255 white)
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+    background_byte:
+      name: Background color byte (0–180, 254 off, 255 white)
+      default: 254
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+    interval:
+      name: Seconds between completed clock uploads
+      default: 60
+      selector:
+        number:
+          min: 60
+          max: 86400
+          mode: box
+
+playlist_pause:
+  name: Pause playlist
+  description: Finish the current design upload, then freeze the remaining hold time. The current curtain picture or native animation keeps running. Only playlists can be paused.
+playlist_resume:
+  name: Resume playlist
+  description: Continue a paused playlist from its remaining hold time without uploading the same design again.
+
+native_control:
+  name: Native curtain control
+  description: Explicit experimental native action for the researched 25025 firmware 4.6.0 curtain. Inspect first. Mutations stop Studio background playback, run once, and require device readback; physical confirmation is separate. See STUDIO_GUIDE.md.
+  fields:
+    address:
+      name: One configured curtain address
+      required: true
+      selector:
+        text:
+    action:
+      name: Native action
+      required: true
+      selector:
+        select:
+          options: [inspect, music, scene_speed, clock_sync, countdown, timer]
+    payload:
+      name: Settings for the selected action
+      description: Inspect and clock_sync use an empty object. Other settings are documented in STUDIO_GUIDE.md. Invalid settings are rejected before any connection or playback stop.
+      default: {}
+      selector:
+        object:

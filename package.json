@@ -1,0 +1,12 @@
+{
+  "name": "hello-fairy-ble-tests",
+  "private": true,
+  "scripts": {
+    "test:browser": "node tests/browser/studio.cjs && node tests/browser/design-tools.cjs && node tests/browser/library-controls.cjs && node tests/browser/orientation.cjs && node tests/browser/movement-preview.cjs && node tests/browser/finishing.cjs && node tests/browser/panel-layouts.cjs && node tests/browser/native-controls.cjs",
+    "format:check": "prettier --check \"custom_components/hello_fairy_ble/frontend/*.js\" \"tests/browser/*.cjs\""
+  },
+  "devDependencies": {
+    "playwright": "1.62.1",
+    "prettier": "3.6.2"
+  }
+}
