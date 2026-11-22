@@ -70,7 +70,7 @@ def _studio_device_display_name(
 ) -> str:
     """Return HA friendly device name paired with the Bluetooth name when distinct."""
     if hasattr(device_reg, "async_get_device_by_identifier"):
-        device = device_reg.async_get_device_by_identifier((DOMAIN, address))
+        device = device_reg.async_get_device_by_identifier((DOMAIN, address), entry.entry_id)
     else:
         device = device_reg.async_get_device(identifiers={(DOMAIN, address)})
     ha_name = ((device.name_by_user or device.name) if device is not None else None) or entry.title
