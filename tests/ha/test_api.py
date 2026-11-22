@@ -3,6 +3,7 @@ https://github.com/tonylofgren/aurora-smart-home
 """
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -200,3 +201,182 @@ def test_malformed_capabilities_rejected(packet):
 def test_captured_profile_and_status_vectors():
     assert decode_device_info(INFO_PACKET) == CAPABILITIES
     assert decode_status(STATUS_PACKET)["brightness_percent"] == 100
+
+
+def _make_bluez_client(api, *, acquired_mtu=512, acquire_exc=None):
+    characteristic = SimpleNamespace(
+        handle=9,
+        properties=["write-without-response", "write"],
+        max_write_without_response_size=509,
+    )
+
+    class Backend:
+        def __init__(self):
+            self._mtu_size = None
+
+        async def _acquire(self):
+            if acquire_exc is not None:
+                raise acquire_exc
+            self._mtu_size = acquired_mtu
+
+    backend = Backend()
+    backend._acquire_mtu = AsyncMock(side_effect=backend._acquire)
+
+    class Client:
+        def __init__(self):
+            self.is_connected = True
+            self._backend = backend
+            self._connected_scanner = SimpleNamespace(source="local-hci0")
+            self.services = SimpleNamespace(get_characteristic=lambda _: characteristic)
+            self.clear_cache = AsyncMock(return_value=True)
+            self.start_notify = AsyncMock()
+            self.disconnect = AsyncMock(side_effect=self._disconnect)
+            self.write_gatt_char = AsyncMock(side_effect=self._write)
+
+        @property
+        def mtu_size(self):
+            return 23 if backend._mtu_size is None else backend._mtu_size
+
+        async def _disconnect(self):
+            self.is_connected = False
+
+        async def _write(self, uuid, packet, response):
+            if packet[:3] == b"\xaa\x00\x00":
+                await api._handle_notification(None, bytearray(INFO_PACKET))
+
+    return Client(), backend
+
+
+async def test_bluez_acquire_mtu_unblocks_fresh_diy_and_caches_once(api):
+    initial, _ = _make_bluez_client(api)
+    fresh, fresh_backend = _make_bluez_client(api)
+    api._client = initial
+    api.state = True
+    with (
+        patch("bleak_retry_connector.establish_connection", AsyncMock(return_value=fresh)),
+        patch("custom_components.hello_fairy_ble.api.asyncio.sleep", AsyncMock()),
+    ):
+        await api.set_frame([0] * 400)
+        fresh_backend._acquire_mtu.assert_awaited_once()
+        await api.set_frame([255] * 400)
+    fresh_backend._acquire_mtu.assert_awaited_once()
+    assert api.studio_snapshot["last_upload"]["frames"] == [[255] * 400]
+
+
+async def test_bluez_acquire_mtu_reused_verified_client(api):
+    bluez_client, backend = _make_bluez_client(api)
+    api._client = bluez_client
+    api.state = True
+    api._verified_diy_client = bluez_client
+    api._verified_diy_source = "local-hci0"
+    api._info_client = bluez_client
+    api._device_info = CAPABILITIES.copy()
+    assert bluez_client.mtu_size == 23
+    with patch("custom_components.hello_fairy_ble.api.asyncio.sleep", AsyncMock()):
+        await api.set_frame([0] * 400)
+    backend._acquire_mtu.assert_awaited_once()
+    assert bluez_client.mtu_size == 512
+    assert api.studio_snapshot["last_upload"]["kind"] == "picture"
+
+
+async def test_bluez_acquire_mtu_low_real_mtu_still_blocks(api):
+    bluez_client, backend = _make_bluez_client(api, acquired_mtu=23)
+    api._client = bluez_client
+    api.state = True
+    api._verified_diy_client = bluez_client
+    api._verified_diy_source = "local-hci0"
+    api._info_client = bluez_client
+    api._device_info = CAPABILITIES.copy()
+    with pytest.raises(RuntimeError, match="blocked before D0/DA"):
+        await api.set_frame([0] * 400)
+    backend._acquire_mtu.assert_awaited_once()
+    bluez_client.write_gatt_char.assert_not_awaited()
+
+
+@pytest.mark.parametrize("acquire_exc", [BleakError("dbus failed"), TimeoutError("timed out")])
+async def test_bluez_acquire_mtu_error_still_fails_closed(api, acquire_exc):
+    bluez_client, backend = _make_bluez_client(api, acquire_exc=acquire_exc)
+    api._client = bluez_client
+    api.state = True
+    api._verified_diy_client = bluez_client
+    api._verified_diy_source = "local-hci0"
+    api._info_client = bluez_client
+    api._device_info = CAPABILITIES.copy()
+    with pytest.raises(RuntimeError, match="blocked before D0/DA"):
+        await api.set_frame([0] * 400)
+    backend._acquire_mtu.assert_awaited_once()
+    bluez_client.write_gatt_char.assert_not_awaited()
+
+
+async def test_bluez_acquire_mtu_cancelled_propagates(api):
+    bluez_client, _ = _make_bluez_client(api, acquire_exc=asyncio.CancelledError())
+    api._client = bluez_client
+    api.state = True
+    api._verified_diy_client = bluez_client
+    api._verified_diy_source = "local-hci0"
+    api._info_client = bluez_client
+    api._device_info = CAPABILITIES.copy()
+    with pytest.raises(asyncio.CancelledError):
+        await api.set_frame([0] * 400)
+    bluez_client.write_gatt_char.assert_not_awaited()
+
+
+async def test_unsupported_device_error_reports_device_profile(api, client):
+    api._device_info = {
+        "firmware": "5.0.0",
+        "model": "TREE832",
+        "led_count": 832,
+        "columns": 32,
+        "rows": 26,
+        "diy_type": 6,
+    }
+    api._info_client = client
+    with pytest.raises(RuntimeError, match="DIY blocked") as exc_info:
+        await api.set_frame([0] * 400)
+    msg = str(exc_info.value)
+    assert "model=TREE832" in msg
+    assert "firmware=5.0.0" in msg
+    assert "led_count=832" in msg
+    assert "columns=32" in msg
+    assert "rows=26" in msg
+    assert "diy_type=6" in msg
+    assert api.address not in msg
+    client.write_gatt_char.assert_not_awaited()
+
+
+async def test_set_color_rgb_preserves_explicit_brightness(api, client):
+    api.state = True
+    await api.set_color_rgb(255, 0, 0, brightness=30)
+    client.write_gatt_char.assert_awaited_once()
+    assert client.write_gatt_char.await_args.args[1] == bytes.fromhex("aa030701000003e8012ccd")
+    assert api.brightness == 30
+
+
+async def test_set_brightness_preserves_preset_mode(api, client):
+    api.state = True
+    api.mode = 2
+    api.current_preset = 18
+    api.brightness = 50
+    await api.set_brightness(30)
+    client.write_gatt_char.assert_awaited_once()
+    assert client.write_gatt_char.await_args.args[1] == bytes.fromhex("aa03040212012cf2")
+    assert api.mode == 2
+    assert api.current_preset == 18
+    assert api.brightness == 30
+
+
+async def test_set_preset_zero_brightness_is_not_coerced_to_50(api, client):
+    api.state = True
+    api.brightness = 50
+    await api.set_preset(3, brightness=0)
+    assert client.write_gatt_char.await_args.args[1] == bytes.fromhex("aa030402030000b6")
+    assert api.brightness == 0
+
+
+async def test_non_preset_status_clears_stale_current_preset(api, client):
+    api.mode = 2
+    api.current_preset = 18
+    packet = build_packet(1, [0, 0, 0, 1, 4, 0, 0, 0])
+    await api._handle_notification(None, bytearray(packet))
+    assert api.mode == 4
+    assert api.current_preset is None

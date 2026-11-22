@@ -18,7 +18,7 @@ from .const import DOMAIN
 from .library import async_setup_library
 from .native_service import async_setup_native
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 PANEL_PATH = "hello-fairy-studio"
 STATIC_PATH = "/hello_fairy_ble_static"
 

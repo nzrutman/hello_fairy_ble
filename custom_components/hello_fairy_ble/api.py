@@ -55,7 +55,7 @@ from .pixel_protocol import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PATCH_VERSION = "2.0.0"
+PATCH_VERSION = "2.1.0"
 PIXEL_WRITE_DELAY = 0.30  # Capture: successive DA writes 298..309 ms apart.
 DRAW_MODE_SETTLE_DELAY = 0.25  # Capture: D0(00) to first DA = 250.990 ms.
 REQUIRED_DA_BYTES = 242  # AA DA EE 01 + 79 indexed triplets + checksum
@@ -394,6 +394,8 @@ class HelloFairyAPI(NativeControls):
             self.current_preset = report.get("scene")
             self.color = None
             self.hsv = None
+        else:
+            self.current_preset = None
         self._update_callback()
 
     async def set_power(self, state: bool):
@@ -456,13 +458,18 @@ class HelloFairyAPI(NativeControls):
         r, g, b = colorsys.hsv_to_rgb(h / 360, s / 100, v / 100)
         self.color = (int(r * 255), int(g * 255), int(b * 255))
 
-    async def set_color_rgb(self, r: int, g: int, b: int):
+    async def set_color_rgb(self, r: int, g: int, b: int, *, brightness: int | None = None):
         """Set color using RGB values (0-255)."""
         # Convert RGB to HSV
         h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
         h_deg = int(h * 360)
         s_pct = int(s * 100)
-        v_pct = int(v * 100) if v > 0 else (self.brightness or 50)  # Maintain brightness
+        if brightness is not None:
+            v_pct = brightness
+        else:
+            v_pct = (
+                int(v * 100) if v > 0 else (self.brightness if self.brightness is not None else 50)
+            )  # Maintain brightness
         await self.set_color_hsv(h_deg, s_pct, v_pct)
 
     async def set_brightness(self, brightness: int):
@@ -471,7 +478,9 @@ class HelloFairyAPI(NativeControls):
             return
 
         brightness = max(0, min(100, brightness))
-        if self.hsv:
+        if self.mode == MODE_PRESET and self.current_preset is not None:
+            await self.set_preset(self.current_preset, brightness=brightness)
+        elif self.hsv:
             # Update current color with new brightness
             h, s, _ = self.hsv
             await self.set_color_hsv(h, s, brightness)
@@ -479,14 +488,18 @@ class HelloFairyAPI(NativeControls):
             # If no color set, use white
             await self.set_color_hsv(0, 0, brightness)
 
-    async def set_preset(self, preset: int):
+    async def set_preset(self, preset: int, *, brightness: int | None = None):
         """Set preset effect (1-58)."""
         if not self.state:
             await self.set_power(True)
             await asyncio.sleep(0.1)
 
         preset = max(1, min(58, preset))
-        brightness = self.brightness or 50
+        target_brightness = (
+            max(0, min(100, brightness))
+            if brightness is not None
+            else (self.brightness if self.brightness is not None else 50)
+        )
 
         command = [
             CMD_PREFIX,
@@ -494,24 +507,24 @@ class HelloFairyAPI(NativeControls):
             0x04,
             MODE_PRESET,
             preset,
-            (brightness * 10) >> 8,
-            (brightness * 10) & 0xFF,
+            (target_brightness * 10) >> 8,
+            (target_brightness * 10) & 0xFF,
         ]
         await self._send_command(command)
 
         # Update state immediately after successful ACK
         self.current_preset = preset
-        self.brightness = brightness
+        self.brightness = target_brightness
         self.mode = MODE_PRESET
         self._in_draw_mode = False
         # Clear color state when in preset mode
         self.color = None
         self.hsv = None
 
-    async def set_effect(self, effect_name: str):
+    async def set_effect(self, effect_name: str, *, brightness: int | None = None):
         """Set effect by name."""
         if effect_name in EFFECT_PRESETS:
-            await self.set_preset(EFFECT_PRESETS[effect_name])
+            await self.set_preset(EFFECT_PRESETS[effect_name], brightness=brightness)
         else:
             _LOGGER.warning("Unknown effect: %s", effect_name)
 
@@ -569,9 +582,33 @@ class HelloFairyAPI(NativeControls):
             20,
             3,
         ):
-            raise RuntimeError(
-                "DIY blocked: only a device-reported 400-LED 20x20 DIY type 3 curtain is supported; standard light controls remain available"
+            reported = (
+                f"model={info.get('model')}, firmware={info.get('firmware')}, "
+                f"led_count={info.get('led_count')}, columns={info.get('columns')}, "
+                f"rows={info.get('rows')}, diy_type={info.get('diy_type')}"
             )
+            _LOGGER.warning("DIY blocked for %s: reported %s", self.address, reported)
+            raise RuntimeError(
+                "DIY blocked: only a device-reported 400-LED 20x20 DIY type 3 curtain is supported "
+                f"(device reported {reported}); standard light controls remain available"
+            )
+
+    async def _acquire_real_mtu_locked(self) -> None:
+        """Trigger BlueZ lazy MTU acquisition when the backend exposes _acquire_mtu."""
+        target = self._client
+        for _ in range(3):
+            if target is None:
+                break
+            acquire = getattr(target, "_acquire_mtu", None)
+            if callable(acquire):
+                if getattr(target, "_mtu_size", None) is None:
+                    try:
+                        async with asyncio.timeout(5):
+                            await acquire()
+                    except Exception as err:
+                        _LOGGER.debug("DIY preflight: _acquire_mtu failed: %s", err)
+                return
+            target = getattr(target, "_backend", None)
 
     def _check_diy_capacity_locked(self, *, fresh: bool) -> str:
         """Inspect the exact current connection; never infer capacity from an old client."""
@@ -642,6 +679,7 @@ class HelloFairyAPI(NativeControls):
                 )
             # No cache refresh, reconnect or CCCD subscription for a healthy
             # already-verified link. Public capacity and source are still checked.
+            await self._acquire_real_mtu_locked()
             self._check_diy_capacity_locked(fresh=False)
             return
         if current_source is None:
@@ -666,6 +704,7 @@ class HelloFairyAPI(NativeControls):
                 "DIY preflight: HA changed adapter/proxy during refresh; capacity unverified, no DIY writes sent"
             )
         await self._verify_diy_device_locked()
+        await self._acquire_real_mtu_locked()
         self._check_diy_capacity_locked(fresh=True)
         self._verified_diy_client = self._client
         self._verified_diy_source = current_source
@@ -868,7 +907,7 @@ class HelloFairyAPI(NativeControls):
                 await asyncio.wait_for(self._status_event.wait(), timeout=5)
             except TimeoutError as err:
                 raise TimeoutError(
-                    "Curtain did not return a fresh status report; pixel readback is not supported by this integration"
+                    "Device did not return a fresh status report; pixel readback is not supported by this integration"
                 ) from err
             return copy.deepcopy(self._reported_status)
 

@@ -117,21 +117,21 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
         """Set brightness (0-100)."""
         await self._api.set_brightness(brightness)
 
-    async def set_color_rgb(self, r: int, g: int, b: int):
+    async def set_color_rgb(self, r: int, g: int, b: int, *, brightness: int | None = None):
         """Set color using RGB values."""
-        await self._api.set_color_rgb(r, g, b)
+        await self._api.set_color_rgb(r, g, b, brightness=brightness)
 
     async def set_color_hsv(self, h: int, s: int, v: int):
         """Set color using HSV values."""
         await self._api.set_color_hsv(h, s, v)
 
-    async def set_preset(self, preset: int):
+    async def set_preset(self, preset: int, *, brightness: int | None = None):
         """Set preset effect."""
-        await self._api.set_preset(preset)
+        await self._api.set_preset(preset, brightness=brightness)
 
-    async def set_effect(self, effect_name: str):
+    async def set_effect(self, effect_name: str, *, brightness: int | None = None):
         """Set effect by name."""
-        await self._api.set_effect(effect_name)
+        await self._api.set_effect(effect_name, brightness=brightness)
 
     # DIY / matrix wrappers
     async def enter_draw_mode(self) -> None:

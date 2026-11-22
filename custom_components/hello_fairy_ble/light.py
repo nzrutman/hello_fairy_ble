@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from homeassistant.components.light import (
@@ -108,25 +109,31 @@ class HelloFairyLight(CoordinatorEntity[HelloFairyCoordinator], LightEntity):
     async def async_turn_on(self, **kwargs):
         """Turn device on."""
         await async_stop_playlist(self.hass)
-        # Always turn on first
-        await self.coordinator.set_power(True)
+        data = getattr(self.coordinator, "data", None)
+        brightness_100 = (
+            brightness_scale(kwargs.get(ATTR_BRIGHTNESS, 255), 0, 255, 0, 100)
+            if ATTR_BRIGHTNESS in kwargs
+            else None
+        )
 
-        # Handle brightness
-        if ATTR_BRIGHTNESS in kwargs:
-            brightness_255 = kwargs.get(ATTR_BRIGHTNESS, 255)
-            # Convert from HA range (0-255) to Hello Fairy range (0-100)
-            brightness_100 = brightness_scale(brightness_255, 0, 255, 0, 100)
-            await self.coordinator.set_brightness(brightness_100)
-
-        # Handle color
-        if ATTR_RGB_COLOR in kwargs:
-            red, green, blue = kwargs.get(ATTR_RGB_COLOR)
-            await self.coordinator.set_color_rgb(red, green, blue)
-
-        # Handle effect
         if ATTR_EFFECT in kwargs:
-            effect_name = kwargs.get(ATTR_EFFECT)
-            await self.coordinator.set_effect(effect_name)
+            effect_name = kwargs[ATTR_EFFECT]
+            if effect_name not in EFFECT_PRESETS:
+                await self.coordinator.set_power(True)
+            await self.coordinator.set_effect(effect_name, brightness=brightness_100)
+        elif ATTR_RGB_COLOR in kwargs:
+            red, green, blue = kwargs[ATTR_RGB_COLOR]
+            current_brightness = data.brightness if data is not None else None
+            target_brightness = brightness_100 if brightness_100 is not None else current_brightness
+            await self.coordinator.set_color_rgb(red, green, blue, brightness=target_brightness)
+        elif brightness_100 is not None:
+            was_on = bool(data is not None and data.state)
+            await self.coordinator.set_power(True)
+            if not was_on:
+                await asyncio.sleep(0.1)
+            await self.coordinator.set_brightness(brightness_100)
+        else:
+            await self.coordinator.set_power(True)
 
         # Update state
         await self.coordinator.async_request_refresh()

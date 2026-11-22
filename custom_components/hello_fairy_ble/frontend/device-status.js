@@ -1,7 +1,7 @@
 /** Device reports and upload history, kept distinct from pixel readback.
  * Generated with aurora@aurora-smart-home (ha-integration-dev skill)
  * https://github.com/tonylofgren/aurora-smart-home */
-import { pixelCss } from "./editor.js?v=2.0.0";
+import { pixelCss } from "./editor.js?v=2.1.0";
 const esc = (s) =>
   String(s).replace(
     /[&<>"']/g,
@@ -11,6 +11,38 @@ const esc = (s) =>
       ],
   );
 const when = (s) => (s ? new Date(s).toLocaleString() : "No report yet");
+const profile = (info) => {
+  if (!info || typeof info !== "object") return "";
+  const parts = [];
+  if (info.model !== undefined && info.model !== null && info.model !== "")
+    parts.push(`model ${info.model}`);
+  if (
+    info.firmware !== undefined &&
+    info.firmware !== null &&
+    info.firmware !== ""
+  )
+    parts.push(`firmware ${info.firmware}`);
+  if (info.led_count !== undefined && info.led_count !== null) {
+    const dims =
+      info.columns !== undefined &&
+      info.columns !== null &&
+      info.rows !== undefined &&
+      info.rows !== null
+        ? ` (${info.columns}×${info.rows})`
+        : "";
+    parts.push(`${info.led_count} LEDs${dims}`);
+  } else if (
+    info.columns !== undefined &&
+    info.columns !== null &&
+    info.rows !== undefined &&
+    info.rows !== null
+  ) {
+    parts.push(`${info.columns}×${info.rows}`);
+  }
+  if (info.diy_type !== undefined && info.diy_type !== null)
+    parts.push(`DIY type ${info.diy_type}`);
+  return parts.length ? `Device profile: ${parts.join(" · ")}` : "";
+};
 class DeviceStatus extends HTMLElement {
   constructor() {
     super();
@@ -97,7 +129,8 @@ class DeviceStatus extends HTMLElement {
                 ? "Music"
                 : `Mode ${r.mode}`
           : "Unknown";
-        return `<section class="device"><strong>${esc(d.name)}</strong><p>${r ? `Reported: ${r.power ? "On" : "Off"} · ${esc(mode)}${r.brightness_percent !== undefined ? " · " + r.brightness_percent + "% brightness" : ""}` : "No device status report yet."}</p><small>${r ? "Device report: " + esc(when(r.received_at)) : ""}</small>${this._errors[d.address] ? `<p class="error">${esc(this._errors[d.address])}</p>` : ""}${u ? `<p>Last sent: ${u.kind === "animation" ? "two-picture animation" : "picture"}</p><div class="history">${u.frames.map((_, i) => `<canvas data-address="${esc(d.address)}" data-index="${i}" aria-label="Last sent picture ${i + 1}"></canvas>`).join("")}</div><small>Upload completed: ${esc(when(u.sent_at))}. Display may have changed since.</small>` : "<small>No upload history in this HA session.</small>"}${settings ? `<small>Last control sent: ${esc(settings.movement.replaceAll("_", " "))}, speed ${settings.speed}%, brightness ${settings.brightness}%. Not device readback.</small>` : ""}</section>`;
+        const profileText = profile(s.device_info);
+        return `<section class="device"><strong>${esc(d.name)}</strong><p>${r ? `Reported: ${r.power ? "On" : "Off"} · ${esc(mode)}${r.brightness_percent !== undefined ? " · " + r.brightness_percent + "% brightness" : ""}` : "No device status report yet."}</p><small>${r ? "Device report: " + esc(when(r.received_at)) : ""}</small>${profileText ? `<small class="profile">${esc(profileText)}</small>` : ""}${this._errors[d.address] ? `<p class="error">${esc(this._errors[d.address])}</p>` : ""}${u ? `<p>Last sent: ${u.kind === "animation" ? "two-picture animation" : "picture"}</p><div class="history">${u.frames.map((_, i) => `<canvas data-address="${esc(d.address)}" data-index="${i}" aria-label="Last sent picture ${i + 1}"></canvas>`).join("")}</div><small>Upload completed: ${esc(when(u.sent_at))}. Display may have changed since.</small>` : "<small>No upload history in this HA session.</small>"}${settings ? `<small>Last control sent: ${esc(settings.movement.replaceAll("_", " "))}, speed ${settings.speed}%, brightness ${settings.brightness}%. Not device readback.</small>` : ""}</section>`;
       })
       .join("")}</div></details>`;
     this.shadowRoot.querySelector("details").open = wasOpen;

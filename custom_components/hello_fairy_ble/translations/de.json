@@ -17,5 +17,12 @@
             "already_configured": "Gerät ist bereits konfiguriert",
             "no_devices_found": "Keine Hello Fairy Geräte gefunden"
         }
+    },
+    "entity": {
+        "button": {
+            "refresh_status": {
+                "name": "Status aktualisieren"
+            }
+        }
     }
 }

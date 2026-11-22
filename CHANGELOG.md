@@ -2,6 +2,14 @@
 
 > Generated with [aurora@aurora-smart-home (ha-integration-dev skill)](https://github.com/tonylofgren/aurora-smart-home)
 
+## 2.1.0
+
+- Bump the integration, Studio header and browser module cache versions to 2.1.0.
+- Acquire the negotiated ATT MTU on local BlueZ adapters (`_acquire_mtu`) before preflight checks so direct Linux Bluetooth adapters are not falsely blocked at the default MTU 23 (#9).
+- Add an explicit diagnostic **Refresh status** button entity and `hello_fairy_ble.refresh_status` service to query current device state (command `01`) without polling at startup or interrupting active Studio playlists (#1).
+- Fix standard light controls: preserve existing or requested brightness in `set_color_rgb`, eliminate the intermediate white-flash `set_brightness` call when turning on with `rgb_color` or `effect`, keep preset mode active when dimming, avoid coercing explicit `0` brightness to `50`, clear stale `current_preset` outside preset mode, and wait 0.1s after power-on when applying standalone brightness (#8).
+- Surface the device-reported hardware profile (`model`, `firmware`, `led_count`, `columns`, `rows`, `diy_type`) in DIY-blocked errors/logs and in Curtain Studio's **Device status & last sent** panel while keeping the strict 400-LED 20×20 DIY type 3 safety gate (#10).
+
 ## 2.0.0
 
 - Bump the integration, Studio header and browser module cache versions to 2.0.0.

@@ -19,6 +19,11 @@
         }
     },
     "entity": {
+        "button": {
+            "refresh_status": {
+                "name": "Refresh status"
+            }
+        },
         "number": {
             "preset": {
                 "name": "Preset"

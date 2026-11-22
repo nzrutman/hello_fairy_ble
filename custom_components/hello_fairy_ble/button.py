@@ -9,9 +9,10 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from bleak import BleakError
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ADDRESS
+from homeassistant.const import CONF_ADDRESS, EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
@@ -19,11 +20,39 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.storage import Store
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
+from .coordinator import HelloFairyCoordinator
 
 LIBRARY_SIGNAL = f"{DOMAIN}_library_changed"
 _LOGGER = logging.getLogger(__name__)
+
+
+class HelloFairyRefreshStatusButton(CoordinatorEntity[HelloFairyCoordinator], ButtonEntity):
+    """Explicitly request the current device status (AA 01 00 AB)."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "refresh_status"
+    _attr_icon = "mdi:refresh"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: HelloFairyCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.device_address}_refresh_status"
+        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, coordinator.device_address)})
+
+    @property
+    def available(self) -> bool:
+        """Return True if the BLE device has been discovered."""
+        return super().available and self.coordinator.device_discovered
+
+    async def async_press(self) -> None:
+        """Request fresh device state from the controller."""
+        try:
+            await self.coordinator.request_status()
+        except (ConnectionError, TimeoutError, RuntimeError, BleakError) as err:
+            raise HomeAssistantError(str(err)) from err
 
 
 class FavoriteDesignButton(ButtonEntity):
@@ -61,6 +90,11 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Restore favorites and track additions/removals without requiring a reload."""
+    runtime = getattr(entry, "runtime_data", None)
+    coordinator = getattr(runtime, "coordinator", None)
+    if coordinator is not None:
+        async_add_entities([HelloFairyRefreshStatusButton(coordinator)])
+
     address = entry.data[CONF_ADDRESS].upper()
     buttons: dict[str, FavoriteDesignButton] = {}
     lock = asyncio.Lock()
