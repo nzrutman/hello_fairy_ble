@@ -228,3 +228,35 @@ async def test_coordinators_share_hass_connection_pool_and_unregister_on_shutdow
         assert c2._api in pool._apis
         await c2.async_shutdown()
         assert c2._api not in pool._apis
+
+
+async def test_coordinator_requests_connectable_devices_and_wires_refresh_callback(hass):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Curtain 1",
+        unique_id=ADDRESS,
+        data={"address": ADDRESS, "name": "Curtain 1"},
+    )
+    entry.add_to_hass(hass)
+    initial = object()
+    refreshed = object()
+
+    with (
+        patch(
+            "custom_components.hello_fairy_ble.coordinator.bluetooth.async_ble_device_from_address",
+            side_effect=[initial, refreshed],
+        ) as lookup,
+        patch(
+            "custom_components.hello_fairy_ble.coordinator.bluetooth.async_register_callback",
+            return_value=Mock(),
+        ) as register,
+    ):
+        coordinator = HelloFairyCoordinator(hass, entry)
+        assert lookup.call_args_list[0].kwargs.get("connectable") is True
+        matcher = register.call_args.args[2]
+        assert matcher["address"] == ADDRESS
+        assert matcher["connectable"] is True
+        assert coordinator._api._ble_device_callback is not None
+        assert coordinator._api._ble_device_callback() is refreshed
+        assert lookup.call_args_list[1].kwargs.get("connectable") is True
+        await coordinator.async_shutdown()

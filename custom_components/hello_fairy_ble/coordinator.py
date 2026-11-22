@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 
+from bleak.backends.device import BLEDevice
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
@@ -46,13 +47,18 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
         # Get connection to bluetooth device, if it's already visible. It's fine
         # if it isn't yet - _async_device_discovered will pick it up later.
         ble_device = bluetooth.async_ble_device_from_address(
-            hass, self.device_address, connectable=False
+            hass, self.device_address, connectable=True
         )
         pool = hass.data.get(CONNECTION_POOL_KEY)
         if pool is None:
             pool = HelloFairyConnectionPool()
             hass.data[CONNECTION_POOL_KEY] = pool
-        self._api = HelloFairyAPI(ble_device, self._async_push_data, connection_pool=pool)
+        self._api = HelloFairyAPI(
+            ble_device,
+            self._async_push_data,
+            connection_pool=pool,
+            ble_device_callback=self._get_ble_device,
+        )
 
         # Initialize DataUpdateCoordinator
         super().__init__(
@@ -70,9 +76,16 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
             bluetooth.async_register_callback(
                 hass,
                 self._async_device_discovered,
-                bluetooth.BluetoothCallbackMatcher(address=self.device_address),
+                bluetooth.BluetoothCallbackMatcher(address=self.device_address, connectable=True),
                 bluetooth.BluetoothScanningMode.PASSIVE,
             )
+        )
+
+    @callback
+    def _get_ble_device(self) -> BLEDevice | None:
+        """Return the best currently available connectable BLEDevice from HA."""
+        return bluetooth.async_ble_device_from_address(
+            self.hass, self.device_address, connectable=True
         )
 
     @callback

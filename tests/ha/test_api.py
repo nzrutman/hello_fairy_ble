@@ -4,7 +4,7 @@ https://github.com/tonylofgren/aurora-smart-home
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from bleak import BleakError
@@ -598,3 +598,24 @@ async def test_connect_timeout_formats_non_empty_error(api):
     ):
         with pytest.raises(ConnectionError, match="3 attempts.*TimeoutError"):
             await api._connect()
+
+
+async def test_connect_refreshes_ble_device_via_callback():
+    stale = BLEDevice("11:11:00:76:0A:88", "Hello Fairy-0A88PPPP", {"source": "stale-scanner"})
+    fresh = BLEDevice("11:11:00:76:0A:88", "Hello Fairy-0A88PPPP", {"source": "bt-proxy-01"})
+    callback = Mock(return_value=fresh)
+    api = HelloFairyAPI(stale, lambda: None, ble_device_callback=callback)
+    fake_client = SimpleNamespace(
+        is_connected=True,
+        start_notify=AsyncMock(),
+        disconnect=AsyncMock(),
+    )
+
+    with patch(
+        "bleak_retry_connector.establish_connection", AsyncMock(return_value=fake_client)
+    ) as establish:
+        await api._connect()
+
+    assert api._ble_device is fresh
+    assert establish.await_args.args[1] is fresh
+    assert establish.await_args.kwargs["ble_device_callback"] is callback

@@ -12,6 +12,7 @@
 - Add shared LRU BLE connection slot management (`HelloFairyConnectionPool`, keeping at most 2 active Hello Fairy connections open and evicting the least-recently-used idle device) so 4+ lights can share a single 3-slot ESPHome Bluetooth proxy reliably without exhausting connection slots.
 - Keep live BLE connections that already negotiate sufficient MTU/write capacity in DIY preflight without forcing an uncached GATT reconnect; when capacity is insufficient or low, wait 1.5s after cache clear before uncached discovery (with a 25s timeout) and format bare `TimeoutError` failures cleanly.
 - Show each curtain's Home Assistant device name alongside its Bluetooth name in Curtain Studio, and fix overlapping controls in the **Installation corrections** section.
+- Request connectable Bluetooth advertisements only (`connectable=True`), refresh the target `BLEDevice` via `ble_device_callback` on each connect/retry, and pause briefly after BLE slot eviction so multi-curtain setups with passive scanners and ESPHome proxies route reliably through connectable proxies.
 
 ## 2.0.0
 

@@ -22,6 +22,7 @@ import logging
 import time
 import weakref
 from collections.abc import Callable, Sequence
+from typing import Any
 
 import bleak_retry_connector
 from bleak import BleakClient, BleakError
@@ -62,6 +63,7 @@ PATCH_VERSION = "2.1.0"
 PIXEL_WRITE_DELAY = 0.30  # Capture: successive DA writes 298..309 ms apart.
 DRAW_MODE_SETTLE_DELAY = 0.25  # Capture: D0(00) to first DA = 250.990 ms.
 CACHE_REFRESH_SETTLE_DELAY = 1.5  # Allow peripheral/proxy to resume advertising after disconnect.
+SLOT_EVICTION_SETTLE_DELAY = 0.4  # Allow ESPHome proxy to finish teardown before next link.
 CACHED_CONNECT_TIMEOUT = 15.0
 UNCACHED_CONNECT_TIMEOUT = 25.0  # Uncached GATT discovery over ESPHome proxies needs extra margin.
 REQUIRED_DA_BYTES = 242  # AA DA EE 01 + 79 indexed triplets + checksum
@@ -144,6 +146,7 @@ class HelloFairyConnectionPool:
                         if await peer.disconnect_if_idle():
                             evicted = True
                             if len(self._active_peers(requester)) < self.max_connections:
+                                await asyncio.sleep(SLOT_EVICTION_SETTLE_DELAY)
                                 self._connecting.add(requester)
                                 return
                     except (BleakError, TimeoutError) as err:
@@ -152,6 +155,8 @@ class HelloFairyConnectionPool:
                         )
 
                 if len(self._active_peers(requester)) < self.max_connections:
+                    if evicted:
+                        await asyncio.sleep(SLOT_EVICTION_SETTLE_DELAY)
                     self._connecting.add(requester)
                     return
                 if evicted:
@@ -186,6 +191,7 @@ class HelloFairyAPI(NativeControls):
         update_callback: Callable[[], None],
         *,
         connection_pool: HelloFairyConnectionPool | None = None,
+        ble_device_callback: Callable[[], BLEDevice | None] | None = None,
     ) -> None:
         """Initialize Hello Fairy API.
 
@@ -193,8 +199,10 @@ class HelloFairyAPI(NativeControls):
             ble_device: The BLE device to connect to, if already discovered
             update_callback: Callback function for device state updates
             connection_pool: Optional shared BLE connection slot pool
+            ble_device_callback: Optional callback returning the best connectable BLEDevice
         """
         self._ble_device = ble_device
+        self._ble_device_callback = ble_device_callback
         self._client: BleakClient | None = None
         self._diy_transfer_client: BleakClient | None = None
         self._verified_diy_client: BleakClient | None = None
@@ -295,9 +303,17 @@ class HelloFairyAPI(NativeControls):
         """Update the BLE device once it has been (re)discovered."""
         self._ble_device = ble_device
 
+    def _refresh_ble_device(self) -> BLEDevice | None:
+        """Refresh the cached BLEDevice from the integration callback when available."""
+        if self._ble_device_callback is not None:
+            fresh = self._ble_device_callback()
+            if fresh is not None:
+                self._ble_device = fresh
+        return self._ble_device
+
     async def _ensure_connected(self) -> None:
         """Ensure we have a connected BLE client."""
-        if self._ble_device is None:
+        if self._refresh_ble_device() is None:
             raise ConnectionError("Hello Fairy device has not been discovered yet")
         if self._client is None or not self._client.is_connected:
             await self._connect()
@@ -392,7 +408,8 @@ class HelloFairyAPI(NativeControls):
                 return
 
     async def _connect_once(self, *, use_services_cache: bool = True) -> None:
-        if self._ble_device is None:
+        ble_device = self._refresh_ble_device()
+        if ble_device is None:
             raise ConnectionError("Hello Fairy device has not been discovered yet")
         if self._client is not None or self._cleanup_pending is not None:
             try:
@@ -408,12 +425,17 @@ class HelloFairyAPI(NativeControls):
         stage = "BLE connect"
         try:
             # Use bleak_retry_connector for robust connection handling
+            connect_kwargs: dict[str, Any] = {
+                "use_services_cache": use_services_cache,
+                "max_attempts": 1,
+            }
+            if self._ble_device_callback is not None:
+                connect_kwargs["ble_device_callback"] = self._ble_device_callback
             self._client = await bleak_retry_connector.establish_connection(
                 BleakClient,
-                self._ble_device,
-                self._ble_device.address,
-                use_services_cache=use_services_cache,
-                max_attempts=1,
+                ble_device,
+                ble_device.address,
+                **connect_kwargs,
             )
             # Start notifications for status updates
             stage = "notification subscription"
