@@ -8,7 +8,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from bleak import BleakError
+from bleak.backends.device import BLEDevice
 
+from custom_components.hello_fairy_ble.api import HelloFairyAPI, HelloFairyConnectionPool
 from custom_components.hello_fairy_ble.diy_controls import decode_device_info, decode_status
 from custom_components.hello_fairy_ble.pixel_protocol import build_packet, validate_color_byte
 
@@ -380,3 +382,143 @@ async def test_non_preset_status_clears_stale_current_preset(api, client):
     await api._handle_notification(None, bytearray(packet))
     assert api.mode == 4
     assert api.current_preset is None
+
+
+def _make_pool_harness(pool, count):
+    apis = [
+        HelloFairyAPI(
+            BLEDevice(f"AA:BB:CC:DD:EE:{i + 1:02X}", f"Curtain {i + 1}", {}),
+            lambda: None,
+            connection_pool=pool,
+        )
+        for i in range(count)
+    ]
+    by_address = {api.address: api for api in apis}
+    active = set()
+    peak = 0
+
+    async def establish(client_cls, device, address, **kwargs):
+        nonlocal peak
+        owner = by_address[address]
+
+        async def disconnect():
+            client.is_connected = False
+            active.discard(address)
+
+        async def write(uuid, packet, response):
+            if packet[1] in (2, 3):
+                cmd = packet[1]
+                await owner._handle_notification(None, bytearray([170, cmd, 0, (170 + cmd) & 255]))
+
+        client = SimpleNamespace(
+            is_connected=True,
+            start_notify=AsyncMock(),
+            disconnect=AsyncMock(side_effect=disconnect),
+            write_gatt_char=AsyncMock(side_effect=write),
+        )
+        active.add(address)
+        peak = max(peak, len(active))
+        return client
+
+    return apis, active, lambda: peak, establish
+
+
+async def test_connection_pool_evicts_lru_idle_curtain_for_four_devices():
+    pool = HelloFairyConnectionPool(max_connections=2)
+    apis, active, get_peak, establish = _make_pool_harness(pool, 4)
+    c1, c2, c3, c4 = apis
+
+    with patch("bleak_retry_connector.establish_connection", AsyncMock(side_effect=establish)):
+        await c1.set_power(True)
+        await c2.set_power(True)
+        assert active == {c1.address, c2.address}
+
+        await c3.set_power(True)
+        assert not c1.has_active_connection
+        assert active == {c2.address, c3.address}
+
+        await c4.set_power(True)
+        assert not c2.has_active_connection
+        assert active == {c3.address, c4.address}
+
+        await c1.set_power(False)
+        assert not c3.has_active_connection
+        assert active == {c4.address, c1.address}
+
+    assert get_peak() == 2
+
+
+async def test_connection_pool_waits_for_busy_peer_without_interrupting_transfer():
+    pool = HelloFairyConnectionPool(max_connections=2)
+    apis, active, _, establish = _make_pool_harness(pool, 3)
+    c1, c2, c3 = apis
+
+    with patch("bleak_retry_connector.establish_connection", AsyncMock(side_effect=establish)):
+        await c1.set_power(True)
+        await c2.set_power(True)
+
+        await c1._command_lock.acquire()
+        c1._diy_transfer_client = c1._client
+        await c2._command_lock.acquire()
+        try:
+            task = asyncio.create_task(c3.set_power(True))
+            await asyncio.sleep(0.02)
+            assert not task.done()
+            assert c1.has_active_connection
+            assert c2.has_active_connection
+
+            c2._command_lock.release()
+            await asyncio.wait_for(task, timeout=2.0)
+
+            assert c1.has_active_connection
+            assert not c2.has_active_connection
+            assert c3.has_active_connection
+            assert active == {c1.address, c3.address}
+        finally:
+            c1._diy_transfer_client = None
+            if c1._command_lock.locked():
+                c1._command_lock.release()
+            if c2._command_lock.locked():
+                c2._command_lock.release()
+
+
+async def test_connection_pool_handles_disconnect_error_and_evicts_next_candidate():
+    pool = HelloFairyConnectionPool(max_connections=2)
+    apis, active, _, establish = _make_pool_harness(pool, 3)
+    c1, c2, c3 = apis
+
+    with patch("bleak_retry_connector.establish_connection", AsyncMock(side_effect=establish)):
+        await c1.set_power(True)
+        await c2.set_power(True)
+        c1._client.disconnect.side_effect = BleakError("disconnect error")
+
+        await c3.set_power(True)
+
+    assert c1._cleanup_pending is not None
+    assert not c2.has_active_connection
+    assert c3.has_active_connection
+    assert active == {c1.address, c3.address}
+
+
+async def test_connection_pool_releases_connecting_slot_on_connect_failure():
+    pool = HelloFairyConnectionPool(max_connections=2)
+    apis, active, _, establish = _make_pool_harness(pool, 3)
+    c1, c2, c3 = apis
+
+    async def flaky_establish(client_cls, device, address, **kwargs):
+        if address == c1.address:
+            raise BleakError("boom")
+        return await establish(client_cls, device, address, **kwargs)
+
+    with (
+        patch("bleak_retry_connector.establish_connection", AsyncMock(side_effect=flaky_establish)),
+        patch("custom_components.hello_fairy_ble.api.asyncio.sleep", AsyncMock()),
+    ):
+        with pytest.raises(ConnectionError, match="3 attempts"):
+            await c1._connect()
+        assert len(pool._connecting) == 0
+
+        await c2.set_power(True)
+        await c3.set_power(True)
+
+    assert active == {c2.address, c3.address}

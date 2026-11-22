@@ -12,6 +12,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components import hello_fairy_ble as integration
+from custom_components.hello_fairy_ble.api import HelloFairyConnectionPool
 from custom_components.hello_fairy_ble.button import (
     HelloFairyRefreshStatusButton,
 )
@@ -19,7 +20,10 @@ from custom_components.hello_fairy_ble.button import (
     async_setup_entry as button_async_setup_entry,
 )
 from custom_components.hello_fairy_ble.const import DOMAIN
-from custom_components.hello_fairy_ble.coordinator import HelloFairyApiData
+from custom_components.hello_fairy_ble.coordinator import (
+    HelloFairyApiData,
+    HelloFairyCoordinator,
+)
 from custom_components.hello_fairy_ble.light import HelloFairyLight
 
 from .conftest import ADDRESS
@@ -183,3 +187,44 @@ async def test_refresh_status_service_preserves_playlist_and_maps_errors(hass, h
                 )
         finally:
             await library.stop()
+
+
+async def test_coordinators_share_hass_connection_pool_and_unregister_on_shutdown(hass):
+    entry1 = MockConfigEntry(
+        domain=DOMAIN,
+        title="Curtain 1",
+        unique_id=ADDRESS,
+        data={"address": ADDRESS, "name": "Curtain 1"},
+    )
+    entry2 = MockConfigEntry(
+        domain=DOMAIN,
+        title="Curtain 2",
+        unique_id="AA:BB:CC:DD:EE:02",
+        data={"address": "AA:BB:CC:DD:EE:02", "name": "Curtain 2"},
+    )
+    entry1.add_to_hass(hass)
+    entry2.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.hello_fairy_ble.coordinator.bluetooth.async_ble_device_from_address",
+            return_value=None,
+        ),
+        patch(
+            "custom_components.hello_fairy_ble.coordinator.bluetooth.async_register_callback",
+            return_value=Mock(),
+        ),
+    ):
+        c1 = HelloFairyCoordinator(hass, entry1)
+        c2 = HelloFairyCoordinator(hass, entry2)
+        pool = c1._api._connection_pool
+        assert isinstance(pool, HelloFairyConnectionPool)
+        assert c2._api._connection_pool is pool
+        assert c1._api in pool._apis
+        assert c2._api in pool._apis
+
+        await c1.async_shutdown()
+        assert c1._api not in pool._apis
+        assert c2._api in pool._apis
+        await c2.async_shutdown()
+        assert c2._api not in pool._apis

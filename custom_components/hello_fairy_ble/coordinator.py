@@ -12,11 +12,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util.hass_dict import HassKey
 
-from .api import HelloFairyAPI
+from .api import HelloFairyAPI, HelloFairyConnectionPool
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
+CONNECTION_POOL_KEY: HassKey[HelloFairyConnectionPool] = HassKey(f"{DOMAIN}_connection_pool")
 
 
 @dataclass
@@ -46,7 +48,11 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
         ble_device = bluetooth.async_ble_device_from_address(
             hass, self.device_address, connectable=False
         )
-        self._api = HelloFairyAPI(ble_device, self._async_push_data)
+        pool = hass.data.get(CONNECTION_POOL_KEY)
+        if pool is None:
+            pool = HelloFairyConnectionPool()
+            hass.data[CONNECTION_POOL_KEY] = pool
+        self._api = HelloFairyAPI(ble_device, self._async_push_data, connection_pool=pool)
 
         # Initialize DataUpdateCoordinator
         super().__init__(
@@ -180,4 +186,8 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
 
     async def async_shutdown(self) -> None:
         """Release this entry's BLE connection during removal/reload."""
-        await self._api.disconnect()
+        try:
+            await self._api.disconnect()
+        finally:
+            if self._api._connection_pool is not None:
+                self._api._connection_pool.unregister(self._api)
