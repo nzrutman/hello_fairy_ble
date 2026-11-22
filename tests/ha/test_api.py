@@ -550,8 +550,10 @@ async def test_prepare_diy_waits_for_cache_refresh_settle_and_uses_uncached_time
     async def fake_establish(client_cls, device, address, **kwargs):
         events.append(f"connect:cache={kwargs.get('use_services_cache')}")
         client.is_connected = True
+        client.mtu_size = 512
         return client
 
+    client.mtu_size = 23
     api._device_info = CAPABILITIES.copy()
     api._info_client = client
     with (
@@ -572,6 +574,18 @@ async def test_prepare_diy_waits_for_cache_refresh_settle_and_uses_uncached_time
         "connect:cache=False",
     ]
     assert UNCACHED_CONNECT_TIMEOUT in timeouts
+
+
+async def test_prepare_diy_reuses_live_connection_when_mtu_already_sufficient(api, client):
+    api._device_info = CAPABILITIES.copy()
+    api._info_client = client
+
+    await api._prepare_diy_locked()
+
+    assert api._verified_diy_client is client
+    assert api._verified_diy_source == "test-proxy"
+    client.clear_cache.assert_not_awaited()
+    client.disconnect.assert_not_awaited()
 
 
 async def test_connect_timeout_formats_non_empty_error(api):

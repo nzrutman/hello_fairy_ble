@@ -10,7 +10,7 @@
 - Fix standard light controls: preserve existing or requested brightness in `set_color_rgb`, eliminate the intermediate white-flash `set_brightness` call when turning on with `rgb_color` or `effect`, keep preset mode active when dimming, avoid coercing explicit `0` brightness to `50`, clear stale `current_preset` outside preset mode, and wait 0.1s after power-on when applying standalone brightness (#8).
 - Surface the device-reported hardware profile (`model`, `firmware`, `led_count`, `columns`, `rows`, `diy_type`) in DIY-blocked errors/logs and in Curtain Studio's **Device status & last sent** panel while keeping the strict 400-LED 20×20 DIY type 3 safety gate (#10).
 - Add shared LRU BLE connection slot management (`HelloFairyConnectionPool`, keeping at most 2 active Hello Fairy connections open and evicting the least-recently-used idle device) so 4+ lights can share a single 3-slot ESPHome Bluetooth proxy reliably without exhausting connection slots.
-- Add a 1.5s settle delay and extended 25s connection timeout for uncached GATT discovery during DIY preflight cache refresh, and preserve the exception type when formatting bare `TimeoutError` connection failures.
+- Keep live BLE connections that already negotiate sufficient MTU/write capacity in DIY preflight without forcing an uncached GATT reconnect; when capacity is insufficient or low, wait 1.5s after cache clear before uncached discovery (with a 25s timeout) and format bare `TimeoutError` failures cleanly.
 
 ## 2.0.0
 

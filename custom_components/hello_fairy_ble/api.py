@@ -871,6 +871,16 @@ class HelloFairyAPI(NativeControls):
             raise RuntimeError(
                 "DIY preflight: active HA adapter/proxy source unavailable; no DIY writes sent"
             )
+        # Keep a live connection that already negotiated sufficient MTU and
+        # write capacity rather than tearing it down for uncached discovery.
+        try:
+            self._check_diy_capacity_locked(fresh=False)
+        except RuntimeError:
+            pass
+        else:
+            self._verified_diy_client = self._client
+            self._verified_diy_source = current_source
+            return
         clear_cache = getattr(self._client, "clear_cache", None)
         if not callable(clear_cache):
             raise RuntimeError(
