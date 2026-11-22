@@ -460,9 +460,10 @@ class HelloFairyAPI(NativeControls):
                 cleanup_failed,
             )
             if isinstance(err, (BleakError, TimeoutError)):
+                detail = str(err) or type(err).__name__
                 raise ConnectionError(
                     f"Failed to connect to Hello Fairy device at {self.address} "
-                    f"during {stage}: {err}"
+                    f"during {stage}: {detail}"
                     + ("; connection cleanup remains pending" if cleanup_failed else "")
                 ) from err
             raise
