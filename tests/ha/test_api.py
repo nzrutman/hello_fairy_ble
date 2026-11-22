@@ -10,7 +10,12 @@ import pytest
 from bleak import BleakError
 from bleak.backends.device import BLEDevice
 
-from custom_components.hello_fairy_ble.api import HelloFairyAPI, HelloFairyConnectionPool
+from custom_components.hello_fairy_ble.api import (
+    CACHE_REFRESH_SETTLE_DELAY,
+    UNCACHED_CONNECT_TIMEOUT,
+    HelloFairyAPI,
+    HelloFairyConnectionPool,
+)
 from custom_components.hello_fairy_ble.diy_controls import decode_device_info, decode_status
 from custom_components.hello_fairy_ble.pixel_protocol import build_packet, validate_color_byte
 
@@ -522,3 +527,60 @@ async def test_connection_pool_releases_connecting_slot_on_connect_failure():
         await c3.set_power(True)
 
     assert active == {c2.address, c3.address}
+
+
+async def test_prepare_diy_waits_for_cache_refresh_settle_and_uses_uncached_timeout(api, client):
+    sleeps: list[float] = []
+    timeouts: list[float | None] = []
+    events: list[str] = []
+    real_timeout = asyncio.timeout
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+        events.append(f"sleep:{delay}")
+
+    def spy_timeout(delay):
+        timeouts.append(delay)
+        return real_timeout(delay)
+
+    async def fake_disconnect():
+        events.append("disconnect")
+        api._client = None
+
+    async def fake_establish(client_cls, device, address, **kwargs):
+        events.append(f"connect:cache={kwargs.get('use_services_cache')}")
+        client.is_connected = True
+        return client
+
+    api._device_info = CAPABILITIES.copy()
+    api._info_client = client
+    with (
+        patch.object(api, "_disconnect_transport_locked", AsyncMock(side_effect=fake_disconnect)),
+        patch.object(api, "_verify_diy_device_locked", AsyncMock()),
+        patch(
+            "custom_components.hello_fairy_ble.api.asyncio.sleep", AsyncMock(side_effect=fake_sleep)
+        ),
+        patch("custom_components.hello_fairy_ble.api.asyncio.timeout", side_effect=spy_timeout),
+        patch("bleak_retry_connector.establish_connection", AsyncMock(side_effect=fake_establish)),
+    ):
+        await api._prepare_diy_locked()
+
+    assert sleeps == [CACHE_REFRESH_SETTLE_DELAY]
+    assert events == [
+        "disconnect",
+        f"sleep:{CACHE_REFRESH_SETTLE_DELAY}",
+        "connect:cache=False",
+    ]
+    assert UNCACHED_CONNECT_TIMEOUT in timeouts
+
+
+async def test_connect_timeout_formats_non_empty_error(api):
+    with (
+        patch(
+            "bleak_retry_connector.establish_connection",
+            AsyncMock(side_effect=TimeoutError()),
+        ),
+        patch("custom_components.hello_fairy_ble.api.asyncio.sleep", AsyncMock()),
+    ):
+        with pytest.raises(ConnectionError, match="3 attempts.*TimeoutError"):
+            await api._connect()

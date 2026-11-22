@@ -61,6 +61,9 @@ _LOGGER = logging.getLogger(__name__)
 PATCH_VERSION = "2.1.0"
 PIXEL_WRITE_DELAY = 0.30  # Capture: successive DA writes 298..309 ms apart.
 DRAW_MODE_SETTLE_DELAY = 0.25  # Capture: D0(00) to first DA = 250.990 ms.
+CACHE_REFRESH_SETTLE_DELAY = 1.5  # Allow peripheral/proxy to resume advertising after disconnect.
+CACHED_CONNECT_TIMEOUT = 15.0
+UNCACHED_CONNECT_TIMEOUT = 25.0  # Uncached GATT discovery over ESPHome proxies needs extra margin.
 REQUIRED_DA_BYTES = 242  # AA DA EE 01 + 79 indexed triplets + checksum
 REQUIRED_ATT_MTU = REQUIRED_DA_BYTES + 3
 MAX_CONCURRENT_CONNECTIONS = 2
@@ -331,7 +334,10 @@ class HelloFairyAPI(NativeControls):
                 if self._connection_pool is not None:
                     await self._connection_pool.acquire_slot(self)
                 try:
-                    async with asyncio.timeout(15):
+                    connect_timeout = (
+                        CACHED_CONNECT_TIMEOUT if use_services_cache else UNCACHED_CONNECT_TIMEOUT
+                    )
+                    async with asyncio.timeout(connect_timeout):
                         await self._connect_once(use_services_cache=use_services_cache)
                 finally:
                     if self._connection_pool is not None:
@@ -342,6 +348,7 @@ class HelloFairyAPI(NativeControls):
                 recoverable = isinstance(err, TimeoutError) or isinstance(
                     err.__cause__, (BleakError, TimeoutError)
                 )
+                detail = str(err) or type(err).__name__
                 if (
                     not recoverable
                     or self._cleanup_pending is not None
@@ -355,12 +362,12 @@ class HelloFairyAPI(NativeControls):
                         self.address,
                         attempt,
                         self._cleanup_pending is not None,
-                        err,
+                        detail,
                     )
                     if recoverable and attempt == 3:
                         raise ConnectionError(
                             f"Hello Fairy connection setup failed after 3 attempts "
-                            f"at {self.address}: {err}"
+                            f"at {self.address}: {detail}"
                         ) from err
                     raise
                 delay = 2.0 * attempt
@@ -371,7 +378,7 @@ class HelloFairyAPI(NativeControls):
                     attempt,
                     self.address,
                     delay,
-                    err,
+                    detail,
                 )
                 await asyncio.sleep(delay)
             else:
@@ -873,6 +880,7 @@ class HelloFairyAPI(NativeControls):
             raise RuntimeError("DIY preflight: BLE cache clear failed; no DIY writes sent")
         original_source = current_source
         await self._disconnect_transport_locked()
+        await asyncio.sleep(CACHE_REFRESH_SETTLE_DELAY)
         await self._connect(use_services_cache=False)
         assert self._client is not None
         current_source = getattr(getattr(self._client, "_connected_scanner", None), "source", None)
