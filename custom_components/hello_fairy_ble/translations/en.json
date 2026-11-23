@@ -22,6 +22,9 @@
         "number": {
             "preset": {
                 "name": "Preset"
+            },
+            "speed": {
+                "name": "Speed"
             }
         }
     }

@@ -30,6 +30,7 @@ from .animation_protocol import build_two_picture_sequence
 from .const import (
     CMD_COLOR_PRESET,
     CMD_POWER,
+    CMD_SPEED,
     CMD_PREFIX,
     COMMAND_CHARACTERISTIC_UUID,
     EFFECT_PRESETS,
@@ -110,6 +111,7 @@ class HelloFairyAPI(NativeControls):
         self.color: tuple[int, int, int] | None = None  # RGB (0-255)
         self.hsv: tuple[int, int, int] | None = None  # H(0-359), S(0-100), V(0-100)
         self.current_preset: int | None = None
+        self.current_speed: int | None = None
         self.mode: int | None = None  # 1=color, 2=preset, 3=music
         self.available_effects = list(EFFECT_PRESETS.keys())
 
@@ -318,12 +320,12 @@ class HelloFairyAPI(NativeControls):
             if expect_ack:
                 self._expected_ack_cmd = None
 
-    async def _send_command(self, command: list[int]) -> None:
-        """Send an existing AA-prefixed command and wait for its ACK."""
+    async def _send_command(self, command: list[int], expect_ack: bool = True) -> None:
+        """Send an existing AA-prefixed command and optionally wait for its ACK."""
         # Calculate and append checksum
         packet = bytes([*command, self._calculate_checksum(command)])
         async with self._command_lock:
-            await self._write_packet_locked(packet, expect_ack=True)
+            await self._write_packet_locked(packet, expect_ack=expect_ack)
 
     async def _handle_notification(self, characteristic: BleakGATTCharacteristic, data: bytearray):
         """Handle notifications from Hello Fairy device."""
@@ -507,6 +509,25 @@ class HelloFairyAPI(NativeControls):
         # Clear color state when in preset mode
         self.color = None
         self.hsv = None
+
+    async def set_speed(self, speed: int):
+        """Set speed (0-100)."""
+        if not self.state:
+            await self.set_power(True)
+            await asyncio.sleep(0.1)
+
+        speed = max(0, min(100, speed))
+
+        command = [
+            CMD_PREFIX,
+            CMD_SPEED,
+            0x01,
+            speed
+        ]
+        await self._send_command(command, expect_ack=False)
+
+        # Update state immediately
+        self.current_speed = speed
 
     async def set_effect(self, effect_name: str):
         """Set effect by name."""

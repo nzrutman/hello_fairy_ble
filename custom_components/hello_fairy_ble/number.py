@@ -27,7 +27,7 @@ async def async_setup_entry(
     data: RuntimeData = config_entry.runtime_data
     coordinator = data.coordinator
 
-    async_add_entities([HelloFairyPresetNumber(coordinator)])
+    async_add_entities([HelloFairyPresetNumber(coordinator), HelloFairySpeedNumber(coordinator)])
 
 
 class HelloFairyPresetNumber(CoordinatorEntity[HelloFairyCoordinator], NumberEntity):
@@ -86,6 +86,69 @@ class HelloFairyPresetNumber(CoordinatorEntity[HelloFairyCoordinator], NumberEnt
             await self.coordinator.set_preset(preset_num)
         except Exception as err:
             _LOGGER.error("Failed to set preset to %d: %s", preset_num, err)
+            raise
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        self.async_write_ha_state()
+        
+class HelloFairySpeedNumber(CoordinatorEntity[HelloFairyCoordinator], NumberEntity):
+    """Number entity for Hello Fairy speed control."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "speed"
+    _attr_icon = "mdi:palette"
+    _attr_mode = NumberMode.SLIDER
+    _attr_native_min_value = 0
+    _attr_native_max_value = 100
+    _attr_native_step = 1
+
+    def __init__(self, coordinator: HelloFairyCoordinator) -> None:
+        """Initialize the speed number entity."""
+        super().__init__(coordinator)
+
+        self._attr_unique_id = f"{coordinator.device_address}_speed"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, coordinator.device_address)},
+            "name": coordinator.device_name,
+            "manufacturer": "Hello Fairy",
+            "model": "BLE Fairy Lights",
+            "connections": {("bluetooth", coordinator.device_address)},
+        }
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the current speed number."""
+        if self.coordinator.data and self.coordinator.data.current_speed:
+            return float(self.coordinator.data.current_speed)
+        return None
+
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        return super().available and self.coordinator.data is not None
+
+    @property
+    def entity_registry_enabled_default(self) -> bool:
+        """Return if entity should be enabled when first added."""
+        return True
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Set the speed number."""
+        speed_num = int(value)
+        _LOGGER.debug("Setting speed to %d", speed_num)
+
+        # Validate speed range
+        if speed_num < 0 or speed_num > 100:
+            _LOGGER.warning("Invalid speed number %d, must be between 0 and 100", speed_num)
+            return
+
+        try:
+            await async_stop_playlist(self.hass)
+            await self.coordinator.set_speed(speed_num)
+        except Exception as err:
+            _LOGGER.error("Failed to set speed to %d: %s", speed_num, err)
             raise
 
     @callback

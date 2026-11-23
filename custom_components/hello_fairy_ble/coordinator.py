@@ -28,6 +28,7 @@ class HelloFairyApiData:
     color: tuple[int, int, int] | None = None  # RGB (0-255)
     hsv: tuple[int, int, int] | None = None  # H(0-359), S(0-100), V(0-100)
     current_preset: int | None = None
+    current_speed: int | None = None
     mode: int | None = None  # 1=color, 2=preset, 3=music
     available_effects: list[str] | None = None
 
@@ -91,6 +92,7 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
                 color=self._api.color,
                 hsv=self._api.hsv,
                 current_preset=self._api.current_preset,
+                current_speed=self._api.current_speed,
                 mode=self._api.mode,
                 available_effects=self._api.available_effects,
             )
@@ -105,6 +107,7 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
             color=self._api.color,
             hsv=self._api.hsv,
             current_preset=self._api.current_preset,
+            current_speed=self._api.current_speed,
             mode=self._api.mode,
             available_effects=self._api.available_effects,
         )
@@ -128,6 +131,10 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
     async def set_preset(self, preset: int):
         """Set preset effect."""
         await self._api.set_preset(preset)
+
+    async def set_speed(self, speed: int):
+        """Set speed."""
+        await self._api.set_speed(speed)
 
     async def set_effect(self, effect_name: str):
         """Set effect by name."""
