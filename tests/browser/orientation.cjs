@@ -13,7 +13,7 @@ const html = `<!doctype html><meta name="viewport" content="width=device-width,i
 import '/panel.js';window.panel=document.querySelector('hello-fairy-studio-panel');window.writes=[];window.requests=[];
 window.state={designs:[],playlist:{items:[],loop:false},playlists:[],favorites:[],orientations:{},status:{state:'stopped',message:'Stopped'}};
 panel.hass={user:{id:'admin'},services:{hello_fairy_ble:{set_frame:{},set_two_picture_animation:{},set_diy_playback:{}}},
-callWS:async r=>{requests.push(r);if(r.type.endsWith('/devices'))return {curtains:[{address:'AA:BB:CC:DD:EE:01',name:'Test curtain',discovered:true,snapshot:{}}]};
+callWS:async r=>{requests.push(r);if(r.type.endsWith('/devices'))return {curtains:[{address:'AA:BB:CC:DD:EE:01',name:'Xmas-Curtains-04 (Hello Fairy-0A4BPPPP)',discovered:true,snapshot:{}}]};
 if(r.action==='save_orientation'){const {address,...correction}=r.payload;state.orientations[address]=correction;}return structuredClone(state);},
 callService:async(...args)=>writes.push(args)};
 </script>`;
@@ -60,6 +60,41 @@ async function check(name, fn) {
   await check("Opening installation settings sends no BLE commands", async () =>
     assert.equal(await page.evaluate(() => writes.length), 0),
   );
+  await check("Installation correction controls do not overlap", async () => {
+    const boxes = async () =>
+      Promise.all(
+        [
+          p.locator("#orientation-settings .orientation-name"),
+          p.locator('#orientation-settings [data-orientation="rotation"]'),
+          p.locator(
+            '#orientation-settings label:has([data-orientation="flip_h"])',
+          ),
+          p.locator(
+            '#orientation-settings label:has([data-orientation="flip_v"])',
+          ),
+        ].map((loc) => loc.boundingBox()),
+      );
+    for (const viewport of [
+      { width: 720, height: 900 },
+      { width: 390, height: 844 },
+      { width: 1000, height: 1000 },
+    ]) {
+      await page.setViewportSize(viewport);
+      const list = await boxes();
+      for (const box of list) assert.ok(box && box.width > 0 && box.height > 0);
+      for (let i = 0; i < list.length; i++)
+        for (let j = i + 1; j < list.length; j++) {
+          const a = list[i],
+            b = list[j];
+          const overlaps =
+            a.x < b.x + b.width &&
+            a.x + a.width > b.x &&
+            a.y < b.y + b.height &&
+            a.y + a.height > b.y;
+          assert.equal(overlaps, false, `overlap at ${viewport.width}px`);
+        }
+    }
+  });
   await check(
     "Saving rotation preserves the draft and only writes HA settings",
     async () => {

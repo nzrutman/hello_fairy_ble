@@ -1,4 +1,4 @@
-"""Hello Fairy BLE integration with built-in Curtain Studio v2.0.0.
+"""Hello Fairy BLE integration with built-in Curtain Studio v2.1.0.
 
 Generated with aurora@aurora-smart-home (ha-integration-dev skill)
 https://github.com/tonylofgren/aurora-smart-home
@@ -46,6 +46,7 @@ SERVICE_SET_PIXEL = "set_pixel"
 SERVICE_SET_FRAME = "set_frame"
 SERVICE_SET_VIRTUAL_FRAME = "set_virtual_frame"
 SERVICE_TEST_PATTERN = "test_pattern"
+SERVICE_REFRESH_STATUS = "refresh_status"
 
 ATTR_ADDRESS = "address"
 ATTR_ADDRESSES = "addresses"
@@ -294,6 +295,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         await _stop_playlist(hass)
         await coordinator.set_frame(pixels)
 
+    @_service_handler
+    async def handle_refresh_status(call: ServiceCall) -> None:
+        coordinator = _coordinator_for_address(hass, call.data[ATTR_ADDRESS])
+        await coordinator.request_status()
+
     hass.services.async_register(
         DOMAIN, SERVICE_ENTER_DRAW_MODE, handle_enter_draw_mode, schema=ADDRESS_SCHEMA
     )
@@ -314,6 +320,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     )
     hass.services.async_register(
         DOMAIN, SERVICE_TEST_PATTERN, handle_test_pattern, schema=TEST_PATTERN_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_REFRESH_STATUS, handle_refresh_status, schema=ADDRESS_SCHEMA
     )
 
     hass.services.async_register(
@@ -354,7 +363,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             "Curtain Studio could not register; standard light controls remain available"
         )
     _LOGGER.info(
-        "Hello Fairy integration 2.0.0 loaded; experimental two-picture playback; connection retries and static protocol preserved"
+        "Hello Fairy integration 2.1.0 loaded; experimental two-picture playback; connection retries and static protocol preserved"
     )
     return True
 

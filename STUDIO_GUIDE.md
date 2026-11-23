@@ -2,7 +2,7 @@
 
 > Generated with [aurora@aurora-smart-home (ha-integration-dev skill)](https://github.com/tonylofgren/aurora-smart-home)
 
-Version **2.0.0** combines the integration and all Studio tools. Open **Curtain Studio** in HA's sidebar as an administrator. Choose your curtains under **Your Hello Fairy curtains**, ordered left to right.
+Version **2.1.0** combines the integration and all Studio tools. Open **Curtain Studio** in HA's sidebar as an administrator. Choose your curtains under **Your Hello Fairy curtains**, ordered left to right. The **Device status & last sent** panel also shows any device-reported hardware profile (`model`, `firmware`, LED count, dimensions, `diy_type`).
 
 ## Text, palettes and artwork areas
 
@@ -83,6 +83,7 @@ Existing power, brightness, colors and presets work as before. New actions are a
 | `hello_fairy_ble.show_design` | Recall `design_id` on optional ordered addresses, or its saved favorite targets. |
 | `hello_fairy_ble.show_message` | Send text/icon pages with duration and an optional `restore_design_id`. |
 | `hello_fairy_ble.start_clock` | Start occasional clock uploads on ordered addresses. |
+| `hello_fairy_ble.refresh_status` | Explicitly query device status (command `01`) for one configured address without stopping active playlists. |
 
 Expand **Use in Home Assistant automations** in Studio for playlist/design IDs. Favorite button entities can be selected directly in an automation without copying IDs. An explicit playlist ID starts that playlist without changing the shared Studio selection. `addresses` is a list, including when it contains only one curtain. Standard HA automation triggers can schedule these actions; no separate scheduler is installed.
 

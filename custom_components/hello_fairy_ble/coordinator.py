@@ -7,16 +7,19 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 
+from bleak.backends.device import BLEDevice
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util.hass_dict import HassKey
 
-from .api import HelloFairyAPI
+from .api import HelloFairyAPI, HelloFairyConnectionPool
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
+CONNECTION_POOL_KEY: HassKey[HelloFairyConnectionPool] = HassKey(f"{DOMAIN}_connection_pool")
 
 
 @dataclass
@@ -44,9 +47,18 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
         # Get connection to bluetooth device, if it's already visible. It's fine
         # if it isn't yet - _async_device_discovered will pick it up later.
         ble_device = bluetooth.async_ble_device_from_address(
-            hass, self.device_address, connectable=False
+            hass, self.device_address, connectable=True
         )
-        self._api = HelloFairyAPI(ble_device, self._async_push_data)
+        pool = hass.data.get(CONNECTION_POOL_KEY)
+        if pool is None:
+            pool = HelloFairyConnectionPool()
+            hass.data[CONNECTION_POOL_KEY] = pool
+        self._api = HelloFairyAPI(
+            ble_device,
+            self._async_push_data,
+            connection_pool=pool,
+            ble_device_callback=self._get_ble_device,
+        )
 
         # Initialize DataUpdateCoordinator
         super().__init__(
@@ -64,9 +76,16 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
             bluetooth.async_register_callback(
                 hass,
                 self._async_device_discovered,
-                bluetooth.BluetoothCallbackMatcher(address=self.device_address),
+                bluetooth.BluetoothCallbackMatcher(address=self.device_address, connectable=True),
                 bluetooth.BluetoothScanningMode.PASSIVE,
             )
+        )
+
+    @callback
+    def _get_ble_device(self) -> BLEDevice | None:
+        """Return the best currently available connectable BLEDevice from HA."""
+        return bluetooth.async_ble_device_from_address(
+            self.hass, self.device_address, connectable=True
         )
 
     @callback
@@ -117,21 +136,21 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
         """Set brightness (0-100)."""
         await self._api.set_brightness(brightness)
 
-    async def set_color_rgb(self, r: int, g: int, b: int):
+    async def set_color_rgb(self, r: int, g: int, b: int, *, brightness: int | None = None):
         """Set color using RGB values."""
-        await self._api.set_color_rgb(r, g, b)
+        await self._api.set_color_rgb(r, g, b, brightness=brightness)
 
     async def set_color_hsv(self, h: int, s: int, v: int):
         """Set color using HSV values."""
         await self._api.set_color_hsv(h, s, v)
 
-    async def set_preset(self, preset: int):
+    async def set_preset(self, preset: int, *, brightness: int | None = None):
         """Set preset effect."""
-        await self._api.set_preset(preset)
+        await self._api.set_preset(preset, brightness=brightness)
 
-    async def set_effect(self, effect_name: str):
+    async def set_effect(self, effect_name: str, *, brightness: int | None = None):
         """Set effect by name."""
-        await self._api.set_effect(effect_name)
+        await self._api.set_effect(effect_name, brightness=brightness)
 
     # DIY / matrix wrappers
     async def enter_draw_mode(self) -> None:
@@ -180,4 +199,8 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
 
     async def async_shutdown(self) -> None:
         """Release this entry's BLE connection during removal/reload."""
-        await self._api.disconnect()
+        try:
+            await self._api.disconnect()
+        finally:
+            if self._api._connection_pool is not None:
+                self._api._connection_pool.unregister(self._api)

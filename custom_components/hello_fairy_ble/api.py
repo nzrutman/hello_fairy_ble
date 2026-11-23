@@ -17,8 +17,12 @@ from __future__ import annotations
 import asyncio
 import colorsys
 import copy
+import itertools
 import logging
+import time
+import weakref
 from collections.abc import Callable, Sequence
+from typing import Any
 
 import bleak_retry_connector
 from bleak import BleakClient, BleakError
@@ -55,24 +59,150 @@ from .pixel_protocol import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PATCH_VERSION = "2.0.0"
+PATCH_VERSION = "2.1.0"
 PIXEL_WRITE_DELAY = 0.30  # Capture: successive DA writes 298..309 ms apart.
 DRAW_MODE_SETTLE_DELAY = 0.25  # Capture: D0(00) to first DA = 250.990 ms.
+CACHE_REFRESH_SETTLE_DELAY = 1.5  # Allow peripheral/proxy to resume advertising after disconnect.
+SLOT_EVICTION_SETTLE_DELAY = 0.4  # Allow ESPHome proxy to finish teardown before next link.
+CACHED_CONNECT_TIMEOUT = 15.0
+UNCACHED_CONNECT_TIMEOUT = 25.0  # Uncached GATT discovery over ESPHome proxies needs extra margin.
 REQUIRED_DA_BYTES = 242  # AA DA EE 01 + 79 indexed triplets + checksum
 REQUIRED_ATT_MTU = REQUIRED_DA_BYTES + 3
+MAX_CONCURRENT_CONNECTIONS = 2
+_ACTIVITY_SEQ = itertools.count(1)
+
+
+class _CommandLock(asyncio.Lock):
+    """Serialize commands on one device and wake slot waiters when released."""
+
+    def __init__(self, on_release: Callable[[], None]) -> None:
+        super().__init__()
+        self._on_release = on_release
+
+    def release(self) -> None:
+        super().release()
+        self._on_release()
+
+
+class HelloFairyConnectionPool:
+    """Share limited BLE adapter/proxy connection slots across configured lights."""
+
+    def __init__(self, max_connections: int = MAX_CONCURRENT_CONNECTIONS) -> None:
+        if max_connections < 1:
+            raise ValueError("max_connections must be >= 1")
+        self.max_connections = max_connections
+        self._apis: weakref.WeakSet[HelloFairyAPI] = weakref.WeakSet()
+        self._connecting: set[HelloFairyAPI] = set()
+        self._slot_lock = asyncio.Lock()
+        self._changed = asyncio.Event()
+
+    def register(self, api: HelloFairyAPI) -> None:
+        self._apis.add(api)
+
+    def unregister(self, api: HelloFairyAPI) -> None:
+        self._apis.discard(api)
+        self._connecting.discard(api)
+        self._changed.set()
+
+    def notify_changed(self) -> None:
+        self._changed.set()
+
+    def _active_peers(self, requester: HelloFairyAPI) -> list[HelloFairyAPI]:
+        return [
+            peer
+            for peer in list(self._apis)
+            if peer is not requester
+            and (
+                peer in self._connecting
+                or peer.has_active_connection
+                or peer._cleanup_pending is not None
+            )
+        ]
+
+    async def acquire_slot(self, requester: HelloFairyAPI, *, timeout: float = 20.0) -> None:
+        """Ensure an active BLE slot is free, evicting the LRU idle peer when needed."""
+        self.register(requester)
+        async with self._slot_lock:
+            deadline = asyncio.get_running_loop().time() + timeout
+            while True:
+                # Clear before inspecting peers so concurrent releases are never missed.
+                self._changed.clear()
+                peers = self._active_peers(requester)
+                if len(peers) < self.max_connections:
+                    self._connecting.add(requester)
+                    return
+
+                candidates = sorted(
+                    (
+                        peer
+                        for peer in peers
+                        if peer not in self._connecting and peer.is_idle_for_eviction
+                    ),
+                    key=lambda peer: (peer._last_used, peer._last_used_seq),
+                )
+                evicted = False
+                for peer in candidates:
+                    try:
+                        if await peer.disconnect_if_idle():
+                            evicted = True
+                            if len(self._active_peers(requester)) < self.max_connections:
+                                await asyncio.sleep(SLOT_EVICTION_SETTLE_DELAY)
+                                self._connecting.add(requester)
+                                return
+                    except (BleakError, TimeoutError) as err:
+                        _LOGGER.debug(
+                            "BLE slot eviction disconnect failed for %s: %s", peer.address, err
+                        )
+
+                if len(self._active_peers(requester)) < self.max_connections:
+                    if evicted:
+                        await asyncio.sleep(SLOT_EVICTION_SETTLE_DELAY)
+                    self._connecting.add(requester)
+                    return
+                if evicted:
+                    continue
+
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    _LOGGER.debug(
+                        "BLE slot wait timed out for %s with %d active peers; attempting connect anyway",
+                        requester.address,
+                        len(peers),
+                    )
+                    self._connecting.add(requester)
+                    return
+
+                try:
+                    await asyncio.wait_for(self._changed.wait(), timeout=min(remaining, 1.0))
+                except TimeoutError:
+                    pass
+
+    def release_connecting(self, requester: HelloFairyAPI) -> None:
+        self._connecting.discard(requester)
+        self._changed.set()
 
 
 class HelloFairyAPI(NativeControls):
     """Hello Fairy BLE API implementation based on protocol from esphome fairy.yaml."""
 
-    def __init__(self, ble_device: BLEDevice | None, update_callback: Callable[[], None]) -> None:
+    def __init__(
+        self,
+        ble_device: BLEDevice | None,
+        update_callback: Callable[[], None],
+        *,
+        connection_pool: HelloFairyConnectionPool | None = None,
+        ble_device_callback: Callable[[], BLEDevice | None] | None = None,
+    ) -> None:
         """Initialize Hello Fairy API.
 
         Args:
             ble_device: The BLE device to connect to, if already discovered
             update_callback: Callback function for device state updates
+            connection_pool: Optional shared BLE connection slot pool
+            ble_device_callback: Optional callback returning the best connectable BLEDevice
         """
         self._ble_device = ble_device
+        self._ble_device_callback = ble_device_callback
         self._client: BleakClient | None = None
         self._diy_transfer_client: BleakClient | None = None
         self._verified_diy_client: BleakClient | None = None
@@ -80,13 +210,18 @@ class HelloFairyAPI(NativeControls):
         # Retain a client whose teardown failed, so a later command cannot
         # silently open another connection while the old one is unaccounted for.
         self._cleanup_pending: BleakClient | None = None
+        self._connection_pool = connection_pool
+        self._last_used: float = 0.0
+        self._last_used_seq: int = 0
         _LOGGER.info("Hello Fairy API %s loaded", PATCH_VERSION)
         self._update_callback = update_callback
 
         # Serialize GATT writes. This is especially important for full-frame DIY
         # uploads, which consist of many DA writes and must not be interleaved
         # with power/color/preset commands.
-        self._command_lock = asyncio.Lock()
+        self._command_lock = _CommandLock(self._on_command_released)
+        if connection_pool is not None:
+            connection_pool.register(self)
         self._init_native()
         self._last_upload: dict | None = None
         self._last_playback: dict | None = None
@@ -122,13 +257,63 @@ class HelloFairyAPI(NativeControls):
         """Return True if the BLE device has been seen."""
         return self._ble_device is not None
 
+    @property
+    def has_active_connection(self) -> bool:
+        """Return True when this API holds a live connected BLE client."""
+        return bool(self._client is not None and self._client.is_connected)
+
+    @property
+    def is_idle_for_eviction(self) -> bool:
+        """Return True when connected and not executing a command or DIY transfer."""
+        return bool(
+            self.has_active_connection
+            and not self._command_lock.locked()
+            and self._diy_transfer_client is None
+        )
+
+    def _touch_used(self) -> None:
+        self._last_used = time.monotonic()
+        self._last_used_seq = next(_ACTIVITY_SEQ)
+
+    def _on_command_released(self) -> None:
+        if self.has_active_connection:
+            self._touch_used()
+        if self._connection_pool is not None:
+            self._connection_pool.notify_changed()
+
+    async def disconnect_if_idle(self) -> bool:
+        """Disconnect this link only if currently idle; never block waiting for lock."""
+        if not self.is_idle_for_eviction:
+            return False
+        try:
+            async with asyncio.timeout(0):
+                await self._command_lock.acquire()
+        except TimeoutError:
+            return False
+        try:
+            if not self.has_active_connection or self._diy_transfer_client is not None:
+                return False
+            _LOGGER.debug("%s releasing idle BLE slot for %s", PATCH_VERSION, self.address)
+            await self._disconnect_transport_locked()
+            return True
+        finally:
+            self._command_lock.release()
+
     def set_ble_device(self, ble_device: BLEDevice) -> None:
         """Update the BLE device once it has been (re)discovered."""
         self._ble_device = ble_device
 
+    def _refresh_ble_device(self) -> BLEDevice | None:
+        """Refresh the cached BLEDevice from the integration callback when available."""
+        if self._ble_device_callback is not None:
+            fresh = self._ble_device_callback()
+            if fresh is not None:
+                self._ble_device = fresh
+        return self._ble_device
+
     async def _ensure_connected(self) -> None:
         """Ensure we have a connected BLE client."""
-        if self._ble_device is None:
+        if self._refresh_ble_device() is None:
             raise ConnectionError("Hello Fairy device has not been discovered yet")
         if self._client is None or not self._client.is_connected:
             await self._connect()
@@ -142,13 +327,17 @@ class HelloFairyAPI(NativeControls):
         self._info_client = None
         self._reset_native_session()
         self._in_draw_mode = False
-        if client is None:
-            return
-        self._cleanup_pending = client
-        # Keep the pending reference if disconnect fails, times out or is cancelled.
-        async with asyncio.timeout(10):
-            await client.disconnect()
-        self._cleanup_pending = None
+        try:
+            if client is None:
+                return
+            self._cleanup_pending = client
+            # Keep the pending reference if disconnect fails, times out or is cancelled.
+            async with asyncio.timeout(10):
+                await client.disconnect()
+            self._cleanup_pending = None
+        finally:
+            if self._connection_pool is not None:
+                self._connection_pool.notify_changed()
 
     async def _connect(self, *, use_services_cache: bool = True) -> None:
         """Retry setup only, before the caller can issue any device commands.
@@ -158,14 +347,24 @@ class HelloFairyAPI(NativeControls):
         """
         for attempt in range(1, 4):
             try:
-                async with asyncio.timeout(15):
-                    await self._connect_once(use_services_cache=use_services_cache)
+                if self._connection_pool is not None:
+                    await self._connection_pool.acquire_slot(self)
+                try:
+                    connect_timeout = (
+                        CACHED_CONNECT_TIMEOUT if use_services_cache else UNCACHED_CONNECT_TIMEOUT
+                    )
+                    async with asyncio.timeout(connect_timeout):
+                        await self._connect_once(use_services_cache=use_services_cache)
+                finally:
+                    if self._connection_pool is not None:
+                        self._connection_pool.release_connecting(self)
             except (ConnectionError, TimeoutError) as err:
                 # _connect_once wraps BLE/timeout failures. Programming errors,
                 # failed teardown and cancellation must not be retried.
                 recoverable = isinstance(err, TimeoutError) or isinstance(
                     err.__cause__, (BleakError, TimeoutError)
                 )
+                detail = str(err) or type(err).__name__
                 if (
                     not recoverable
                     or self._cleanup_pending is not None
@@ -179,12 +378,12 @@ class HelloFairyAPI(NativeControls):
                         self.address,
                         attempt,
                         self._cleanup_pending is not None,
-                        err,
+                        detail,
                     )
                     if recoverable and attempt == 3:
                         raise ConnectionError(
                             f"Hello Fairy connection setup failed after 3 attempts "
-                            f"at {self.address}: {err}"
+                            f"at {self.address}: {detail}"
                         ) from err
                     raise
                 delay = 2.0 * attempt
@@ -195,7 +394,7 @@ class HelloFairyAPI(NativeControls):
                     attempt,
                     self.address,
                     delay,
-                    err,
+                    detail,
                 )
                 await asyncio.sleep(delay)
             else:
@@ -209,7 +408,8 @@ class HelloFairyAPI(NativeControls):
                 return
 
     async def _connect_once(self, *, use_services_cache: bool = True) -> None:
-        if self._ble_device is None:
+        ble_device = self._refresh_ble_device()
+        if ble_device is None:
             raise ConnectionError("Hello Fairy device has not been discovered yet")
         if self._client is not None or self._cleanup_pending is not None:
             try:
@@ -225,12 +425,17 @@ class HelloFairyAPI(NativeControls):
         stage = "BLE connect"
         try:
             # Use bleak_retry_connector for robust connection handling
+            connect_kwargs: dict[str, Any] = {
+                "use_services_cache": use_services_cache,
+                "max_attempts": 1,
+            }
+            if self._ble_device_callback is not None:
+                connect_kwargs["ble_device_callback"] = self._ble_device_callback
             self._client = await bleak_retry_connector.establish_connection(
                 BleakClient,
-                self._ble_device,
-                self._ble_device.address,
-                use_services_cache=use_services_cache,
-                max_attempts=1,
+                ble_device,
+                ble_device.address,
+                **connect_kwargs,
             )
             # Start notifications for status updates
             stage = "notification subscription"
@@ -243,6 +448,7 @@ class HelloFairyAPI(NativeControls):
                     await self._handle_notification(sender, data)
 
             await subscribed_client.start_notify(NOTIFY_CHARACTERISTIC_UUID, notification)
+            self._touch_used()
         except asyncio.CancelledError:
             if self._client is not None:
                 try:
@@ -276,9 +482,10 @@ class HelloFairyAPI(NativeControls):
                 cleanup_failed,
             )
             if isinstance(err, (BleakError, TimeoutError)):
+                detail = str(err) or type(err).__name__
                 raise ConnectionError(
                     f"Failed to connect to Hello Fairy device at {self.address} "
-                    f"during {stage}: {err}"
+                    f"during {stage}: {detail}"
                     + ("; connection cleanup remains pending" if cleanup_failed else "")
                 ) from err
             raise
@@ -394,6 +601,8 @@ class HelloFairyAPI(NativeControls):
             self.current_preset = report.get("scene")
             self.color = None
             self.hsv = None
+        else:
+            self.current_preset = None
         self._update_callback()
 
     async def set_power(self, state: bool):
@@ -456,13 +665,18 @@ class HelloFairyAPI(NativeControls):
         r, g, b = colorsys.hsv_to_rgb(h / 360, s / 100, v / 100)
         self.color = (int(r * 255), int(g * 255), int(b * 255))
 
-    async def set_color_rgb(self, r: int, g: int, b: int):
+    async def set_color_rgb(self, r: int, g: int, b: int, *, brightness: int | None = None):
         """Set color using RGB values (0-255)."""
         # Convert RGB to HSV
         h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
         h_deg = int(h * 360)
         s_pct = int(s * 100)
-        v_pct = int(v * 100) if v > 0 else (self.brightness or 50)  # Maintain brightness
+        if brightness is not None:
+            v_pct = brightness
+        else:
+            v_pct = (
+                int(v * 100) if v > 0 else (self.brightness if self.brightness is not None else 50)
+            )  # Maintain brightness
         await self.set_color_hsv(h_deg, s_pct, v_pct)
 
     async def set_brightness(self, brightness: int):
@@ -471,7 +685,9 @@ class HelloFairyAPI(NativeControls):
             return
 
         brightness = max(0, min(100, brightness))
-        if self.hsv:
+        if self.mode == MODE_PRESET and self.current_preset is not None:
+            await self.set_preset(self.current_preset, brightness=brightness)
+        elif self.hsv:
             # Update current color with new brightness
             h, s, _ = self.hsv
             await self.set_color_hsv(h, s, brightness)
@@ -479,14 +695,18 @@ class HelloFairyAPI(NativeControls):
             # If no color set, use white
             await self.set_color_hsv(0, 0, brightness)
 
-    async def set_preset(self, preset: int):
+    async def set_preset(self, preset: int, *, brightness: int | None = None):
         """Set preset effect (1-58)."""
         if not self.state:
             await self.set_power(True)
             await asyncio.sleep(0.1)
 
         preset = max(1, min(58, preset))
-        brightness = self.brightness or 50
+        target_brightness = (
+            max(0, min(100, brightness))
+            if brightness is not None
+            else (self.brightness if self.brightness is not None else 50)
+        )
 
         command = [
             CMD_PREFIX,
@@ -494,24 +714,24 @@ class HelloFairyAPI(NativeControls):
             0x04,
             MODE_PRESET,
             preset,
-            (brightness * 10) >> 8,
-            (brightness * 10) & 0xFF,
+            (target_brightness * 10) >> 8,
+            (target_brightness * 10) & 0xFF,
         ]
         await self._send_command(command)
 
         # Update state immediately after successful ACK
         self.current_preset = preset
-        self.brightness = brightness
+        self.brightness = target_brightness
         self.mode = MODE_PRESET
         self._in_draw_mode = False
         # Clear color state when in preset mode
         self.color = None
         self.hsv = None
 
-    async def set_effect(self, effect_name: str):
+    async def set_effect(self, effect_name: str, *, brightness: int | None = None):
         """Set effect by name."""
         if effect_name in EFFECT_PRESETS:
-            await self.set_preset(EFFECT_PRESETS[effect_name])
+            await self.set_preset(EFFECT_PRESETS[effect_name], brightness=brightness)
         else:
             _LOGGER.warning("Unknown effect: %s", effect_name)
 
@@ -569,9 +789,33 @@ class HelloFairyAPI(NativeControls):
             20,
             3,
         ):
-            raise RuntimeError(
-                "DIY blocked: only a device-reported 400-LED 20x20 DIY type 3 curtain is supported; standard light controls remain available"
+            reported = (
+                f"model={info.get('model')}, firmware={info.get('firmware')}, "
+                f"led_count={info.get('led_count')}, columns={info.get('columns')}, "
+                f"rows={info.get('rows')}, diy_type={info.get('diy_type')}"
             )
+            _LOGGER.warning("DIY blocked for %s: reported %s", self.address, reported)
+            raise RuntimeError(
+                "DIY blocked: only a device-reported 400-LED 20x20 DIY type 3 curtain is supported "
+                f"(device reported {reported}); standard light controls remain available"
+            )
+
+    async def _acquire_real_mtu_locked(self) -> None:
+        """Trigger BlueZ lazy MTU acquisition when the backend exposes _acquire_mtu."""
+        target = self._client
+        for _ in range(3):
+            if target is None:
+                break
+            acquire = getattr(target, "_acquire_mtu", None)
+            if callable(acquire):
+                if getattr(target, "_mtu_size", None) is None:
+                    try:
+                        async with asyncio.timeout(5):
+                            await acquire()
+                    except Exception as err:
+                        _LOGGER.debug("DIY preflight: _acquire_mtu failed: %s", err)
+                return
+            target = getattr(target, "_backend", None)
 
     def _check_diy_capacity_locked(self, *, fresh: bool) -> str:
         """Inspect the exact current connection; never infer capacity from an old client."""
@@ -642,12 +886,23 @@ class HelloFairyAPI(NativeControls):
                 )
             # No cache refresh, reconnect or CCCD subscription for a healthy
             # already-verified link. Public capacity and source are still checked.
+            await self._acquire_real_mtu_locked()
             self._check_diy_capacity_locked(fresh=False)
             return
         if current_source is None:
             raise RuntimeError(
                 "DIY preflight: active HA adapter/proxy source unavailable; no DIY writes sent"
             )
+        # Keep a live connection that already negotiated sufficient MTU and
+        # write capacity rather than tearing it down for uncached discovery.
+        try:
+            self._check_diy_capacity_locked(fresh=False)
+        except RuntimeError:
+            pass
+        else:
+            self._verified_diy_client = self._client
+            self._verified_diy_source = current_source
+            return
         clear_cache = getattr(self._client, "clear_cache", None)
         if not callable(clear_cache):
             raise RuntimeError(
@@ -658,6 +913,7 @@ class HelloFairyAPI(NativeControls):
             raise RuntimeError("DIY preflight: BLE cache clear failed; no DIY writes sent")
         original_source = current_source
         await self._disconnect_transport_locked()
+        await asyncio.sleep(CACHE_REFRESH_SETTLE_DELAY)
         await self._connect(use_services_cache=False)
         assert self._client is not None
         current_source = getattr(getattr(self._client, "_connected_scanner", None), "source", None)
@@ -666,6 +922,7 @@ class HelloFairyAPI(NativeControls):
                 "DIY preflight: HA changed adapter/proxy during refresh; capacity unverified, no DIY writes sent"
             )
         await self._verify_diy_device_locked()
+        await self._acquire_real_mtu_locked()
         self._check_diy_capacity_locked(fresh=True)
         self._verified_diy_client = self._client
         self._verified_diy_source = current_source
@@ -868,7 +1125,7 @@ class HelloFairyAPI(NativeControls):
                 await asyncio.wait_for(self._status_event.wait(), timeout=5)
             except TimeoutError as err:
                 raise TimeoutError(
-                    "Curtain did not return a fresh status report; pixel readback is not supported by this integration"
+                    "Device did not return a fresh status report; pixel readback is not supported by this integration"
                 ) from err
             return copy.deepcopy(self._reported_status)
 

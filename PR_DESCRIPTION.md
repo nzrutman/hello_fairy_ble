@@ -1,35 +1,22 @@
-# Major expansion: integrated Curtain Studio, full-image uploads and native curtain controls
+# Release 2.1.0: BlueZ MTU acquisition, explicit status sync, standard light fixes and profile diagnostics
 
-This PR substantially expands the integration beyond its existing light controls, adding a complete curtain design and playback interface directly inside Home Assistant. It brings image uploads, drawing tools, saved designs, multi-curtain layouts, playlists and additional native device controls together in one HACS package.
+This release addresses issues reported after v2.0.0 while keeping all existing wire formats, fail-closed DIY safety gates, and non-polling startup behavior intact.
 
-Existing power, brightness, color, presets and entity identifiers are preserved. No separate dashboard card, add-on or external application is required.
+### Changes
 
-### Features
-
-- Image import, painting, reusable patterns, pixel text, palettes and multi-curtain layouts.
-- Saved designs, favorite HA buttons, playlists, clock/message displays, orientation corrections, library backup/import and local movement preview.
-- Complete 20×20 image uploads and native two-picture animations.
-- Native movement, DIY speed and brightness.
-- Capability-gated microphone music, preset speed, explicit clock sync, countdowns and individual device schedules.
-- Timestamped device reports displayed separately from upload history.
-
-### Bluetooth reliability
-
-Controlled tests showed that splitting an image into many small writes retained only the final packet. Uploads now reproduce the captured Android six-packet sequence after verifying the device profile, connection source, MTU and write capacity.
-
-Commands are serialized. Connection setup uses bounded retries and cleanup; partial uploads and uncertain device writes are never automatically replayed. Additional native controls require capability checks and available readback. Schedule conversion handles timezone and weekday rollover, with documented DST limitations.
+- **Direct BlueZ adapter DIY support (#9):** Acquire the negotiated ATT MTU via `_acquire_mtu()` on local BlueZ backends (`BleakClientBlueZDBus`, bounded to 5s, cached once per backend) before preflight checks on both fresh and reused verified connections. Genuine low-MTU links and acquisition errors still fail closed before any D0/DA write.
+- **Explicit status sync for all devices (#1):** Add a diagnostic **Refresh status** button entity and `hello_fairy_ble.refresh_status` action (`AA 01 00 AB`) without enabling automatic startup/periodic BLE polling or interrupting active Studio playlists.
+- **Standard light control fixes (#8):** Preserve requested or current brightness in `set_color_rgb` instead of forcing 100%, eliminate intermediate white-flash `set_brightness` writes when turning on with `rgb_color` or `effect`, keep preset mode active when dimming, avoid coercing explicit `0` brightness to `50`, clear stale `current_preset` outside preset mode, and keep the 0.1s power-on settle delay when applying standalone brightness. (Hardware-specific flicker on non-curtain strips remains under investigation via user diagnostics.)
+- **Unsupported device profile diagnostics (#10):** Keep the fail-closed `(400, 20, 20, 3)` DIY gate for unverified hardware such as the 832-LED tree, and surface the device-reported `model`, `firmware`, `led_count`, `columns`×`rows`, and `diy_type` in DIY-blocked errors/logs and in Curtain Studio's **Device status & last sent** panel.
+- **Multi-curtain BLE proxy slot sharing:** Add a shared per-HA `HelloFairyConnectionPool` (`MAX_CONCURRENT_CONNECTIONS = 2`) that evicts the least-recently-used idle device before connecting another (waiting briefly without interrupting active commands/DIY transfers), letting 4+ curtains share a single 3-slot ESPHome ESP32 proxy reliably.
+- **Version 2.1.0:** Bump `manifest.json`, API/integration/Studio versions, frontend module cache query strings, and documentation (`CHANGELOG.md`, `README.md`, `PROTOCOL.md`, `STUDIO_GUIDE.md`, `VALIDATION.md`).
 
 ### Validation
 
-- 253 tests passed on each of Home Assistant 2026.9.3 and 2026.10.1, using real framework components with simulated Bluetooth I/O.
-- 97 offline browser/helper checks passed.
-- Official hassfest, Ruff and Prettier checks passed.
-- I have validated the release on my curtain setup using an ESPHome Bluetooth proxy.
+- 293 tests passed on Home Assistant **2026.9.3** (`hello-fairy-ha-tests:2026.9.3`, Python 3.14, offline container).
+- 293 tests passed on Home Assistant **2026.10.1** (`hello-fairy-ha-tests:2026.10.1`, Python 3.14, offline container).
+- 97 offline browser/helper checks passed with Node and headless Edge using Playwright 1.62.1.
+- Official `hassfest` passed (`1` integration, `0` invalid integrations).
+- Ruff 0.15.14 lint/format and Prettier 3.6.2 formatting checks passed.
 
-Full pixel readback, synchronized cross-curtain playback, native font uploads, extra device storage, true firmware animation pause and native scene loops are not claimed. Evidence gaps and hardware limitations are documented.
-
-Includes tests, CI workflows, installation instructions and protocol evidence. No vendor APK, decompiled source, raw Bluetooth captures or credentials are included.
-
-### Ongoing collaboration
-
-I appreciate that this is a substantial addition to review and maintain. I’m happy to help work through review feedback, investigate compatibility issues and continue improving the integration after this PR. If you would prefer a different structure or a staged review, I’m happy to coordinate while keeping the end result available as one integrated package.
+Automated suites simulate Bluetooth I/O and Home Assistant browser sessions. Physical hardware confirmation for the BlueZ `_acquire_mtu()` pattern was reported in #9; explicit status sync, standard light control fixes, profile diagnostics, and 2-slot LRU proxy connection sharing await release confirmation on real devices, and #8/#10 remain open for reporter diagnostics/captures where hardware specifics differ.

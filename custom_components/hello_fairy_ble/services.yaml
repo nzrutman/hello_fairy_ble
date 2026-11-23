@@ -334,3 +334,18 @@ native_control:
       default: {}
       selector:
         object:
+
+refresh_status:
+  name: Refresh device status
+  description: >-
+    Explicitly query the Hello Fairy device for its current power, mode,
+    brightness, color, or preset state (command 01). Does not stop a running
+    Studio playlist or return pixel images.
+  fields:
+    address:
+      name: Bluetooth address
+      description: Bluetooth MAC/address of the configured Hello Fairy device.
+      required: true
+      example: "AA:BB:CC:DD:EE:FF"
+      selector:
+        text:

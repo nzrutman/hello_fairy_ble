@@ -12,13 +12,15 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.components import frontend, panel_custom, websocket_api
 from homeassistant.components.http import StaticPathConfig
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr
 
 from .const import DOMAIN
 from .library import async_setup_library
 from .native_service import async_setup_native
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 PANEL_PATH = "hello-fairy-studio"
 STATIC_PATH = "/hello_fairy_ble_static"
 
@@ -63,6 +65,22 @@ def async_remove_studio_if_unused(hass: HomeAssistant) -> None:
     frontend.async_remove_panel(hass, PANEL_PATH, warn_if_unknown=False)
 
 
+def _studio_device_display_name(
+    device_reg: dr.DeviceRegistry, entry: ConfigEntry, bt_name: str, address: str
+) -> str:
+    """Return HA friendly device name paired with the Bluetooth name when distinct."""
+    if hasattr(device_reg, "async_get_device_by_identifier"):
+        device = device_reg.async_get_device_by_identifier((DOMAIN, address), entry.entry_id)
+    else:
+        device = device_reg.async_get_device(identifiers={(DOMAIN, address)})
+    ha_name = ((device.name_by_user or device.name) if device is not None else None) or entry.title
+    clean_ha = str(ha_name or "").strip()
+    clean_bt = str(bt_name or "").strip()
+    if clean_ha and clean_bt and clean_ha.casefold() != clean_bt.casefold():
+        return f"{clean_ha} ({clean_bt})"
+    return clean_ha or clean_bt
+
+
 @websocket_api.websocket_command({vol.Required("type"): "hello_fairy_ble/studio/devices"})
 @websocket_api.require_admin
 @callback
@@ -70,16 +88,21 @@ def websocket_studio_devices(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> None:
     """Return configured, loaded curtains; no manual MAC or BLE scan required."""
+    device_reg = dr.async_get(hass)
     curtains = []
     for entry in hass.config_entries.async_entries(DOMAIN):
         runtime = getattr(entry, "runtime_data", None)
         if runtime is None:
             continue
         coordinator = runtime.coordinator
+        bt_name = coordinator.device_name
         curtains.append(
             {
                 "address": coordinator.device_address,
-                "name": coordinator.device_name,
+                "name": _studio_device_display_name(
+                    device_reg, entry, bt_name, coordinator.device_address
+                ),
+                "bt_name": bt_name,
                 "discovered": coordinator.device_discovered,
                 "snapshot": coordinator.studio_snapshot,
             }

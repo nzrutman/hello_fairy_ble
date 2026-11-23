@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from homeassistant.helpers import device_registry as dr
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -27,6 +28,44 @@ async def test_admin_device_list_real_websocket(hass, hass_ws_client):
     result = await client.receive_json()
     assert result["success"] is True
     assert result["result"]["curtains"] == []
+
+
+async def test_studio_devices_includes_ha_name_with_bt_name(hass, hass_ws_client):
+    await prepare(hass)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Hello Fairy-0A4BPPPP",
+        unique_id=ADDRESS,
+        data={"address": ADDRESS},
+    )
+    entry.add_to_hass(hass)
+    coordinator = SimpleNamespace(
+        device_address=ADDRESS,
+        device_name="Hello Fairy-0A4BPPPP",
+        device_discovered=True,
+        studio_snapshot={"pixel_readback": False, "reported": None, "last_upload": None},
+    )
+    entry.runtime_data = RuntimeData(coordinator, Mock())
+    device_reg = dr.async_get(hass)
+    device = device_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, ADDRESS)},
+        name="Hello Fairy-0A4BPPPP",
+    )
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "hello_fairy_ble/studio/devices"})
+    result = await client.receive_json()
+    assert result["success"] is True
+    assert result["result"]["curtains"][0]["name"] == "Hello Fairy-0A4BPPPP"
+    assert result["result"]["curtains"][0]["bt_name"] == "Hello Fairy-0A4BPPPP"
+
+    device_reg.async_update_device(device.id, name_by_user="Xmas-Curtains-04")
+    await client.send_json_auto_id({"type": "hello_fairy_ble/studio/devices"})
+    renamed = await client.receive_json()
+    assert renamed["success"] is True
+    assert renamed["result"]["curtains"][0]["name"] == "Xmas-Curtains-04 (Hello Fairy-0A4BPPPP)"
+    assert renamed["result"]["curtains"][0]["bt_name"] == "Hello Fairy-0A4BPPPP"
 
 
 async def test_non_admin_cannot_read_devices(hass, hass_ws_client, hass_read_only_access_token):
