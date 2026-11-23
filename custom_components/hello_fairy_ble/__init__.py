@@ -1,4 +1,4 @@
-"""Hello Fairy BLE integration with built-in Curtain Studio v2.1.0.
+"""Hello Fairy BLE integration with built-in Curtain Studio v2.1.1.
 
 Generated with aurora@aurora-smart-home (ha-integration-dev skill)
 https://github.com/tonylofgren/aurora-smart-home
@@ -363,7 +363,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             "Curtain Studio could not register; standard light controls remain available"
         )
     _LOGGER.info(
-        "Hello Fairy integration 2.1.0 loaded; experimental two-picture playback; connection retries and static protocol preserved"
+        "Hello Fairy integration 2.1.1 loaded; experimental two-picture playback; connection retries and static protocol preserved"
     )
     return True
 

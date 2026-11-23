@@ -35,6 +35,7 @@ from .const import (
     CMD_COLOR_PRESET,
     CMD_POWER,
     CMD_PREFIX,
+    CMD_SPEED,
     COMMAND_CHARACTERISTIC_UUID,
     EFFECT_PRESETS,
     MODE_COLOR,
@@ -44,7 +45,7 @@ from .const import (
 from .diy_controls import build_playback_commands, decode_device_info, decode_status
 from .native import NativeControls
 from .native_capabilities import decode_extensions
-from .native_effects import decode_music_status
+from .native_effects import decode_music_status, decode_scene_speed
 from .pixel_protocol import (
     PIXEL_COUNT,
     PIXEL_OFF,
@@ -59,7 +60,7 @@ from .pixel_protocol import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PATCH_VERSION = "2.1.0"
+PATCH_VERSION = "2.1.1"
 PIXEL_WRITE_DELAY = 0.30  # Capture: successive DA writes 298..309 ms apart.
 DRAW_MODE_SETTLE_DELAY = 0.25  # Capture: D0(00) to first DA = 250.990 ms.
 CACHE_REFRESH_SETTLE_DELAY = 1.5  # Allow peripheral/proxy to resume advertising after disconnect.
@@ -245,6 +246,7 @@ class HelloFairyAPI(NativeControls):
         self.color: tuple[int, int, int] | None = None  # RGB (0-255)
         self.hsv: tuple[int, int, int] | None = None  # H(0-359), S(0-100), V(0-100)
         self.current_preset: int | None = None
+        self.current_speed: int | None = None
         self.mode: int | None = None  # 1=color, 2=preset, 3=music
         self.available_effects = list(EFFECT_PRESETS.keys())
 
@@ -525,12 +527,12 @@ class HelloFairyAPI(NativeControls):
             if expect_ack:
                 self._expected_ack_cmd = None
 
-    async def _send_command(self, command: list[int]) -> None:
-        """Send an existing AA-prefixed command and wait for its ACK."""
+    async def _send_command(self, command: list[int], expect_ack: bool = True) -> None:
+        """Send an existing AA-prefixed command and optionally wait for its ACK."""
         # Calculate and append checksum
         packet = bytes([*command, self._calculate_checksum(command)])
         async with self._command_lock:
-            await self._write_packet_locked(packet, expect_ack=True)
+            await self._write_packet_locked(packet, expect_ack=expect_ack)
 
     async def _handle_notification(self, characteristic: BleakGATTCharacteristic, data: bytearray):
         """Handle notifications from Hello Fairy device."""
@@ -549,15 +551,21 @@ class HelloFairyAPI(NativeControls):
             self._update_callback()
             return
 
-        if self._handle_native_notification(bytes(data)):
+        raw = bytes(data)
+        if self._handle_native_notification(raw):
             return
-        info = decode_device_info(bytes(data))
+        speed = decode_scene_speed(raw)
+        if speed is not None:
+            self.current_speed = speed
+            self._update_callback()
+            return
+        info = decode_device_info(raw)
         if info is not None:
             if self._native_client is not self._client:
                 self._reset_native_session()
                 self._native_client = self._client
             self._device_info = info
-            self._native_extensions = decode_extensions(bytes(data))
+            self._native_extensions = decode_extensions(raw)
             self._info_client = self._client
             self._info_event.set()
             return
@@ -570,10 +578,10 @@ class HelloFairyAPI(NativeControls):
         ) == (400, 20, 20, 3)
         # Preserve legacy device scaling unless this exact link reported the
         # known curtain profile. Studio and the HA entity share this decoder.
-        report = decode_status(bytes(data), scene_divisor=1 if curtain_units else 10)
+        report = decode_status(raw, scene_divisor=1 if curtain_units else 10)
         if report is None:
             return
-        music = decode_music_status(bytes(data))
+        music = decode_music_status(raw)
         if report.get("mode") == 3 and curtain_units and music is None:
             return
         if music is not None:
@@ -727,6 +735,21 @@ class HelloFairyAPI(NativeControls):
         # Clear color state when in preset mode
         self.color = None
         self.hsv = None
+
+    async def set_speed(self, speed: int) -> None:
+        """Set preset speed (0-100)."""
+        if not self.state:
+            await self.set_power(True)
+            await asyncio.sleep(0.1)
+
+        speed = max(0, min(100, int(speed)))
+
+        command = [CMD_PREFIX, CMD_SPEED, 0x01, speed]
+        await self._send_command(command, expect_ack=False)
+
+        # Update state immediately (command 0x0C does not emit a 4-byte ACK)
+        self.current_speed = speed
+        self._update_callback()
 
     async def set_effect(self, effect_name: str, *, brightness: int | None = None):
         """Set effect by name."""

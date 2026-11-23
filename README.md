@@ -52,6 +52,7 @@ Once configured, your Hello Fairy lights will appear as a light entity in Home A
 - **Brightness**: Adjust brightness with the brightness slider
 - **Effects**: Choose from 14 built-in effects in the effect dropdown
 - **Preset**: There is also a separate numerical control to select any of the full range of effects by number
+- **Speed**: A numerical slider (0–100) to adjust preset animation speed (command `0x0C`)
 - **Refresh status**: A diagnostic button entity (and `hello_fairy_ble.refresh_status` action) lets you explicitly request current device status (`AA 01 00 AB`) without startup or background polling
 
 ### Available Effects
@@ -113,6 +114,12 @@ Commands use the following structure:
   - VVVV: Brightness (0-1000, 2 bytes)
   - CC: Checksum
 
+### Speed Commands
+
+- **Preset Speed**: `AA 0C 01 SS CC` (does not emit a 4-byte ACK)
+  - SS: Speed (0-100)
+  - CC: Checksum
+
 ### Status Notifications
 
 The device sends status updates via BLE notifications when state changes from the remote. You can also explicitly request current device state using the diagnostic **Refresh status** button entity, the `hello_fairy_ble.refresh_status` action, or **Read device status** in Curtain Studio (command `01`); reported fields depend on the device profile.
@@ -130,7 +137,7 @@ Studio provides image import, painting, patterns, text, saved designs, multi-cur
 
 ### Installation and compatibility
 
-Version 2.1 requires Home Assistant **2026.9.3 or newer**. Back up the existing integration folder, install the complete `custom_components/hello_fairy_ble` folder, restart HA and refresh the browser. Keep existing configured devices. Open **Curtain Studio** in the sidebar as an administrator; the header should show **2.1.0**.
+Version 2.1 requires Home Assistant **2026.9.3 or newer**. Back up the existing integration folder, install the complete `custom_components/hello_fairy_ble` folder, restart HA and refresh the browser. Keep existing configured devices. Open **Curtain Studio** in the sidebar as an administrator; the header should show **2.1.1**.
 
 DIY uploads require verified ATT MTU ≥245 and at least 242 bytes per write. Both ESPHome Bluetooth proxies (the tested ESPHome 2026.9.1 proxy reported MTU 512 and capacity 509) and direct local Linux BlueZ adapters (via lazy MTU acquisition) are supported. When multiple curtains/lights are configured, the integration shares BLE connection slots automatically (keeping at most 2 active connections open and evicting the least-recently-used idle device before connecting another) so 4+ devices can share a single 3-slot ESPHome ESP32 proxy. The integration reproduces the captured Android six-packet transfer and refuses unsupported capacity; it does not probe oversized writes or fall back to many tiny image packets. Standard light controls remain available when DIY is unsupported.
 

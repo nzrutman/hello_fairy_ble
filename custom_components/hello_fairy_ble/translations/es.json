@@ -23,6 +23,11 @@
             "refresh_status": {
                 "name": "Actualizar estado"
             }
+        },
+        "number": {
+            "speed": {
+                "name": "Velocidad"
+            }
         }
     }
 }

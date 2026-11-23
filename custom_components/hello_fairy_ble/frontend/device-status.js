@@ -1,7 +1,7 @@
 /** Device reports and upload history, kept distinct from pixel readback.
  * Generated with aurora@aurora-smart-home (ha-integration-dev skill)
  * https://github.com/tonylofgren/aurora-smart-home */
-import { pixelCss } from "./editor.js?v=2.1.0";
+import { pixelCss } from "./editor.js?v=2.1.1";
 const esc = (s) =>
   String(s).replace(
     /[&<>"']/g,

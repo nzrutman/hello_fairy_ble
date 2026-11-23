@@ -2,6 +2,14 @@
 
 > Generated with [aurora@aurora-smart-home (ha-integration-dev skill)](https://github.com/tonylofgren/aurora-smart-home)
 
+## 2.1.1
+
+- Bump the integration, Studio header and browser module cache versions to 2.1.1.
+- Add a universal **Speed** number entity (`0–100` slider, command `0x0C`) for preset speed control across all Hello Fairy devices (based on PR #12) with the following fixes:
+  - Preserve speed `0` in `native_value` instead of treating `0` as falsy/`unknown`.
+  - Push coordinator state immediately after sending command `0x0C` (`expect_ack=False`, since `0x0C` does not emit a 4-byte ACK) and refresh `current_speed` from `0x0C` device notifications or Curtain Studio native inspection without weakening `native.py`'s session capability gate.
+  - Use `mdi:speedometer`, gate availability on `device_discovered`, validate range before stopping active Studio playlists, add German and Spanish entity translations, and add unit/HA integration tests.
+
 ## 2.1.0
 
 - Bump the integration, Studio header and browser module cache versions to 2.1.0.

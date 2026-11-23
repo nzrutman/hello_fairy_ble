@@ -61,6 +61,7 @@ class NativeControls:
         speed = decode_scene_speed(data)
         if speed is not None and self._native_pending == 0x0C:
             self._native_speed = speed
+            self.current_speed = speed
             self._native_events[0x0C].set()
             return True
         font = decode_text_capability(data)

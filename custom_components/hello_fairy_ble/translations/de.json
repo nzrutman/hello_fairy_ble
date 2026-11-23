@@ -23,6 +23,11 @@
             "refresh_status": {
                 "name": "Status aktualisieren"
             }
+        },
+        "number": {
+            "speed": {
+                "name": "Geschwindigkeit"
+            }
         }
     }
 }
