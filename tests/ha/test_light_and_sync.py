@@ -339,6 +339,7 @@ async def test_coordinator_set_speed_and_native_sync_push_data(hass):
         domain=DOMAIN,
         title="Curtain 1",
         unique_id=ADDRESS,
+        state=ConfigEntryState.SETUP_IN_PROGRESS,
         data={"address": ADDRESS, "name": "Curtain 1"},
     )
     entry.add_to_hass(hass)
