@@ -2,7 +2,7 @@
 
 > Generated with [aurora@aurora-smart-home (ha-integration-dev skill)](https://github.com/tonylofgren/aurora-smart-home)
 
-Version **2.1.0** combines the integration and all Studio tools. Open **Curtain Studio** in HA's sidebar as an administrator. Choose your curtains under **Your Hello Fairy curtains**, ordered left to right. The **Device status & last sent** panel also shows any device-reported hardware profile (`model`, `firmware`, LED count, dimensions, `diy_type`).
+Version **2.1.1** combines the integration and all Studio tools. Open **Curtain Studio** in HA's sidebar as an administrator. Choose your curtains under **Your Hello Fairy curtains**, ordered left to right. The **Device status & last sent** panel also shows any device-reported hardware profile (`model`, `firmware`, LED count, dimensions, `diy_type`).
 
 ## Text, palettes and artwork areas
 

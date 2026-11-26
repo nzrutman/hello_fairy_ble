@@ -1,22 +1,25 @@
-# Release 2.1.0: BlueZ MTU acquisition, explicit status sync, standard light fixes and profile diagnostics
+# Release 2.1.1: Preset speed control entity (#12) & idle BLE disconnect option (#8)
 
-This release addresses issues reported after v2.0.0 while keeping all existing wire formats, fail-closed DIY safety gates, and non-polling startup behavior intact.
+This release ports and fixes the universal preset **Speed** number entity from [PR #12](https://github.com/nzrutman/hello_fairy_ble/pull/12) by @jr4 on top of `v2.1.0` (`9a212b7`), while preserving the session-gated `native.py` `scene_speed` capability contract and keeping cached speed state synchronized between both paths. It also adds a per-device **Idle Bluetooth disconnect delay** option for strips that flicker while holding a persistent BLE link (#8).
 
 ### Changes
 
-- **Direct BlueZ adapter DIY support (#9):** Acquire the negotiated ATT MTU via `_acquire_mtu()` on local BlueZ backends (`BleakClientBlueZDBus`, bounded to 5s, cached once per backend) before preflight checks on both fresh and reused verified connections. Genuine low-MTU links and acquisition errors still fail closed before any D0/DA write.
-- **Explicit status sync for all devices (#1):** Add a diagnostic **Refresh status** button entity and `hello_fairy_ble.refresh_status` action (`AA 01 00 AB`) without enabling automatic startup/periodic BLE polling or interrupting active Studio playlists.
-- **Standard light control fixes (#8):** Preserve requested or current brightness in `set_color_rgb` instead of forcing 100%, eliminate intermediate white-flash `set_brightness` writes when turning on with `rgb_color` or `effect`, keep preset mode active when dimming, avoid coercing explicit `0` brightness to `50`, clear stale `current_preset` outside preset mode, and keep the 0.1s power-on settle delay when applying standalone brightness. (Hardware-specific flicker on non-curtain strips remains under investigation via user diagnostics.)
-- **Unsupported device profile diagnostics (#10):** Keep the fail-closed `(400, 20, 20, 3)` DIY gate for unverified hardware such as the 832-LED tree, and surface the device-reported `model`, `firmware`, `led_count`, `columns`×`rows`, and `diy_type` in DIY-blocked errors/logs and in Curtain Studio's **Device status & last sent** panel.
-- **Multi-curtain BLE proxy slot sharing:** Add a shared per-HA `HelloFairyConnectionPool` (`MAX_CONCURRENT_CONNECTIONS = 2`) that evicts the least-recently-used idle device before connecting another (waiting briefly without interrupting active commands/DIY transfers), letting 4+ curtains share a single 3-slot ESPHome ESP32 proxy reliably.
-- **Version 2.1.0:** Bump `manifest.json`, API/integration/Studio versions, frontend module cache query strings, and documentation (`CHANGELOG.md`, `README.md`, `PROTOCOL.md`, `STUDIO_GUIDE.md`, `VALIDATION.md`).
+- **Universal Speed number entity (`0x0C`):** Add `CMD_SPEED = 0x0C` (`const.py`), `HelloFairyAPI.set_speed()` (`api.py`), `HelloFairyApiData.current_speed` / `HelloFairyCoordinator.set_speed()` (`coordinator.py`), and `HelloFairySpeedNumber` (`number.py`, 0–100 slider) with English, German, and Spanish translations.
+- **Fixes over PR #12:**
+  - Preserve speed `0` in `HelloFairySpeedNumber.native_value` (`is not None` check instead of falsy truthiness).
+  - Push coordinator state immediately in `set_speed()` (`expect_ack=False`, since `0x0C` does not emit a 4-byte ACK) and call `async_request_refresh()` after updating.
+  - Decode `0x0C` device notifications into `current_speed` and sync `current_speed` during `inspect_native()` / `set_native("scene_speed", ...)` without lowering `native.py`'s `scene_speed_supported` session capability gate.
+  - Use `mdi:speedometer`, gate availability on `device_discovered`, validate `0..100` bounds before stopping active Studio playlists.
+- **Configurable Idle BLE Disconnect (#8):**
+  - Add `HelloFairyOptionsFlow` (`idle_disconnect_seconds`, `0–600` seconds, default `0` to keep existing persistent-connection behavior) with English, German, and Spanish translations.
+  - Schedule idle `disconnect_if_idle()` cleanup in `HelloFairyAPI` after commands finish when `idle_disconnect_seconds > 0` (canceling on new commands, active DIY transfers, or explicit `disconnect()`), and expose `idle_disconnect_seconds` in `diagnostics.py` (`transport`).
+- **Tests & Documentation:** Add `0x0C` and idle-disconnect API, coordinator, entity, options-flow, diagnostics, and playlist-interlock regressions in `tests/ha/test_api.py`, `tests/ha/test_light_and_sync.py`, and `tests/ha/test_library.py`; bump versions to `2.1.1` across `manifest.json`, `__init__.py`, `api.py`, `studio.py`, frontend modules/header, `tests/browser/studio.cjs`, `CHANGELOG.md`, `README.md`, `STUDIO_GUIDE.md`, and `VALIDATION.md`.
 
 ### Validation
 
-- 293 tests passed on Home Assistant **2026.9.3** (`hello-fairy-ha-tests:2026.9.3`, Python 3.14, offline container).
-- 293 tests passed on Home Assistant **2026.10.1** (`hello-fairy-ha-tests:2026.10.1`, Python 3.14, offline container).
-- 97 offline browser/helper checks passed with Node and headless Edge using Playwright 1.62.1.
+- 311 tests passed on Home Assistant **2026.9.3** (`hello-fairy-ha-tests:2026.9.3`, Python 3.14, offline container).
+- 311 tests passed on Home Assistant **2026.10.1** (`hello-fairy-ha-tests:2026.10.1`, Python 3.14, offline container).
 - Official `hassfest` passed (`1` integration, `0` invalid integrations).
-- Ruff 0.15.14 lint/format and Prettier 3.6.2 formatting checks passed.
-
-Automated suites simulate Bluetooth I/O and Home Assistant browser sessions. Physical hardware confirmation for the BlueZ `_acquire_mtu()` pattern was reported in #9; explicit status sync, standard light control fixes, profile diagnostics, and 2-slot LRU proxy connection sharing await release confirmation on real devices, and #8/#10 remain open for reporter diagnostics/captures where hardware specifics differ.
+- Ruff 0.15.14 lint (`ruff check --no-cache .`) and format (`ruff format --check --no-cache .`) passed.
+- Prettier 3.6.2 check (`npx prettier --end-of-line auto --check ...`) passed.
+- 98 offline browser/helper checks passed (`npm run test:browser`).

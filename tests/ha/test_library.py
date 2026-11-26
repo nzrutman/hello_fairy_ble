@@ -343,10 +343,13 @@ async def test_transfer_failure_during_stop_remains_visible(library):
     assert "upload interrupted" in library.status["message"]
 
 
-@pytest.mark.parametrize("action", ["on", "off", "preset"])
+@pytest.mark.parametrize("action", ["on", "off", "preset", "speed"])
 async def test_normal_entities_stop_background_before_controlling(hass, action):
     from custom_components.hello_fairy_ble.light import HelloFairyLight
-    from custom_components.hello_fairy_ble.number import HelloFairyPresetNumber
+    from custom_components.hello_fairy_ble.number import (
+        HelloFairyPresetNumber,
+        HelloFairySpeedNumber,
+    )
 
     order = []
 
@@ -363,12 +366,20 @@ async def test_normal_entities_stop_background_before_controlling(hass, action):
         device_name="Curtain",
         set_power=AsyncMock(side_effect=control),
         set_preset=AsyncMock(side_effect=control),
+        set_speed=AsyncMock(side_effect=control),
         async_request_refresh=AsyncMock(),
     )
-    entity = HelloFairyPresetNumber(c) if action == "preset" else HelloFairyLight(c)
+    if action == "preset":
+        entity = HelloFairyPresetNumber(c)
+    elif action == "speed":
+        entity = HelloFairySpeedNumber(c)
+    else:
+        entity = HelloFairyLight(c)
     entity.hass = hass
     if action == "preset":
         await entity.async_set_native_value(3)
+    elif action == "speed":
+        await entity.async_set_native_value(50)
     elif action == "off":
         await entity.async_turn_off()
     else:

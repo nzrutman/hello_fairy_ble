@@ -18,6 +18,17 @@
             "no_devices_found": "No Hello Fairy devices found"
         }
     },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Hello Fairy device options",
+                "description": "Set an idle Bluetooth disconnect delay (in seconds) to close the BLE connection after commands finish. Set to 0 to stay connected (default). Values like 3–10 seconds can eliminate LED strip flickering caused by persistent BLE connection polling and allow concurrent phone app/remote use.",
+                "data": {
+                    "idle_disconnect_seconds": "Idle Bluetooth disconnect delay (seconds)"
+                }
+            }
+        }
+    },
     "entity": {
         "button": {
             "refresh_status": {
@@ -27,6 +38,9 @@
         "number": {
             "preset": {
                 "name": "Preset"
+            },
+            "speed": {
+                "name": "Speed"
             }
         }
     }

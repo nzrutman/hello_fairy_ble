@@ -619,3 +619,195 @@ async def test_connect_refreshes_ble_device_via_callback():
     assert api._ble_device is fresh
     assert establish.await_args.args[1] is fresh
     assert establish.await_args.kwargs["ble_device_callback"] is callback
+
+
+async def test_set_speed_wire_command_clamping_and_state_push(api, client):
+    callback = Mock()
+    api._update_callback = callback
+    api.state = True
+
+    await api.set_speed(70)
+    call = client.write_gatt_char.await_args
+    assert call.args[1] == bytes.fromhex("aa0c0146fd")
+    assert call.kwargs["response"] is False
+    assert api.current_speed == 70
+    callback.assert_called_once()
+
+    await api.set_speed(0)
+    assert client.write_gatt_char.await_args.args[1] == bytes.fromhex("aa0c0100b7")
+    assert api.current_speed == 0
+
+    await api.set_speed(-5)
+    assert client.write_gatt_char.await_args.args[1] == bytes.fromhex("aa0c0100b7")
+    assert api.current_speed == 0
+
+    await api.set_speed(150)
+    assert client.write_gatt_char.await_args.args[1] == bytes.fromhex("aa0c01641b")
+    assert api.current_speed == 100
+
+
+async def test_set_speed_powers_on_when_off(api, client):
+    api.state = False
+    with patch("custom_components.hello_fairy_ble.api.asyncio.sleep", AsyncMock()) as sleep_mock:
+        await api.set_speed(50)
+
+    assert [c.args[1].hex() for c in client.write_gatt_char.await_args_list] == [
+        "aa020101ae",
+        "aa0c0132e9",
+    ]
+    sleep_mock.assert_awaited_once_with(0.1)
+    assert api.state is True
+    assert api.current_speed == 50
+
+
+async def test_set_speed_failure_does_not_mutate_cached_speed(api, client):
+    api.state = True
+    api.current_speed = 40
+    client.write_gatt_char.side_effect = BleakError("radio failed")
+
+    with pytest.raises(BleakError):
+        await api.set_speed(80)
+
+    assert api.current_speed == 40
+
+
+async def test_speed_notification_updates_current_speed_without_granting_native_capability(
+    api, client
+):
+    callback = Mock()
+    api._update_callback = callback
+    await api._handle_notification(None, bytearray(INFO_PACKET))
+
+    await api._handle_notification(None, bytearray(build_packet(0x0C, [65])))
+    assert api.current_speed == 65
+    callback.assert_called_once()
+    assert api.studio_snapshot["native"]["scene_speed_supported"] is False
+
+    for invalid in (
+        bytes.fromhex("aa0c016400"),
+        build_packet(0x0C, [101]),
+    ):
+        await api._handle_notification(None, bytearray(invalid))
+        assert api.current_speed == 65
+    assert callback.call_count == 1
+
+    await api._handle_notification(None, bytearray(bytes.fromhex("aa0c00b6")))
+    assert api.current_speed == 65
+
+
+def _make_reconnectable_harness(api):
+    clients = []
+
+    async def establish(client_cls, device, address, **kwargs):
+        async def disconnect():
+            fake.is_connected = False
+
+        async def write(uuid, packet, response):
+            if packet[1] in (2, 3):
+                cmd = packet[1]
+                await api._handle_notification(None, bytearray([170, cmd, 0, (170 + cmd) & 255]))
+
+        fake = SimpleNamespace(
+            is_connected=True,
+            start_notify=AsyncMock(),
+            disconnect=AsyncMock(side_effect=disconnect),
+            write_gatt_char=AsyncMock(side_effect=write),
+        )
+        clients.append(fake)
+        return fake
+
+    return clients, establish
+
+
+async def test_idle_disconnect_disabled_by_default_keeps_connection(api, client):
+    assert api.idle_disconnect_seconds == 0
+    await api.set_power(True)
+    assert api.has_active_connection
+    assert api._idle_disconnect_handle is None
+    client.disconnect.assert_not_awaited()
+
+
+async def test_idle_disconnect_closes_after_delay_and_reconnects_on_next_command():
+    api = HelloFairyAPI(
+        BLEDevice("AA:BB:CC:DD:EE:01", "Test Strip", {}),
+        lambda: None,
+        idle_disconnect_seconds=0.04,
+    )
+    clients, establish = _make_reconnectable_harness(api)
+
+    with patch("bleak_retry_connector.establish_connection", AsyncMock(side_effect=establish)):
+        try:
+            await api.set_power(True)
+            assert len(clients) == 1
+            assert api.has_active_connection
+            clients[0].disconnect.assert_not_awaited()
+
+            await asyncio.sleep(0.08)
+            clients[0].disconnect.assert_awaited_once()
+            assert not api.has_active_connection
+
+            await api.set_color_hsv(240, 100, 80)
+            assert len(clients) == 2
+            assert api.has_active_connection
+            clients[1].write_gatt_char.assert_awaited_once()
+            clients[1].disconnect.assert_not_awaited()
+
+            await asyncio.sleep(0.08)
+            clients[1].disconnect.assert_awaited_once()
+            assert not api.has_active_connection
+        finally:
+            await api.disconnect()
+
+
+async def test_idle_disconnect_resets_across_rapid_commands_and_respects_busy_transfer():
+    api = HelloFairyAPI(
+        BLEDevice("AA:BB:CC:DD:EE:01", "Test Strip", {}),
+        lambda: None,
+        idle_disconnect_seconds=0.06,
+    )
+    clients, establish = _make_reconnectable_harness(api)
+
+    with patch("bleak_retry_connector.establish_connection", AsyncMock(side_effect=establish)):
+        try:
+            await api.set_power(True)
+            await asyncio.sleep(0.03)
+            assert api.has_active_connection
+            clients[0].disconnect.assert_not_awaited()
+
+            await api.set_color_hsv(120, 100, 50)
+            assert len(clients) == 1
+            await asyncio.sleep(0.03)
+            assert api.has_active_connection
+            clients[0].disconnect.assert_not_awaited()
+
+            api._diy_transfer_client = clients[0]
+            await asyncio.sleep(0.08)
+            assert api.has_active_connection
+            clients[0].disconnect.assert_not_awaited()
+
+            api._diy_transfer_client = None
+            await api.set_color_hsv(180, 100, 50)
+            assert len(clients) == 1
+            await asyncio.sleep(0.09)
+            clients[0].disconnect.assert_awaited_once()
+            assert not api.has_active_connection
+        finally:
+            api._diy_transfer_client = None
+            await api.disconnect()
+
+
+async def test_explicit_disconnect_cancels_pending_idle_timer():
+    api = HelloFairyAPI(
+        BLEDevice("AA:BB:CC:DD:EE:01", "Test Strip", {}),
+        lambda: None,
+        idle_disconnect_seconds=30,
+    )
+    clients, establish = _make_reconnectable_harness(api)
+
+    with patch("bleak_retry_connector.establish_connection", AsyncMock(side_effect=establish)):
+        await api.set_power(True)
+        assert api._idle_disconnect_handle is not None
+        await api.disconnect()
+        assert api._idle_disconnect_handle is None
+        assert not api.has_active_connection
+        clients[0].disconnect.assert_awaited_once()

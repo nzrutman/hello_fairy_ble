@@ -2,7 +2,22 @@
 
 > Generated with [aurora@aurora-smart-home (ha-integration-dev skill)](https://github.com/tonylofgren/aurora-smart-home)
 
-Candidate **2.1.0**, based on `v2.0.0` (`ef15c41`).
+Release **2.1.1**, based on `v2.1.0` (`9a212b7`).
+
+## Automated checks (2.1.1)
+
+- 311 tests passed on real Home Assistant **2026.9.3**, Python 3.14 (`hello-fairy-ha-tests:2026.9.3` offline container, `311 passed in 10.65s`).
+- 311 tests passed on real Home Assistant **2026.10.1**, Python 3.14 (`hello-fairy-ha-tests:2026.10.1` offline container, `311 passed in 10.47s`).
+- Official hassfest passed (`ghcr.io/home-assistant/hassfest:latest` offline container): 1 integration, 0 invalid integrations, no warnings.
+- Ruff 0.15.14 lint (`ruff check --no-cache .`) and format (`ruff format --check --no-cache .`) passed (`42 files already formatted`).
+- Prettier 3.6.2 formatting check (`npx prettier --end-of-line auto --check "custom_components/hello_fairy_ble/frontend/*.js" "tests/browser/*.cjs"`) passed.
+- 98 offline browser/helper workflow checks passed (`npm run test:browser` with Playwright): 27 Studio checks, 13 drawing-tool checks, 13 advanced library checks, six orientation checks, 10 movement-preview checks, 12 backup/layout/playback finishing checks, eight combined panel-layout/native/import-interlock checks, and nine native-control checks.
+
+New 2.1.1 test coverage in `tests/ha/` exercises:
+- Command `0x0C` framing (`aa0c01SSCC`) with clamping (`0..100`), power-on settle before speed writes, unchanged `current_speed` on BLE write failure, unsolicited `0x0C` notification updates without granting `native.py` `scene_speed_supported`, `HelloFairySpeedNumber` metadata/icon/availability/zero-value/out-of-range guards, playlist stop ordering before speed writes, and coordinator data propagation across `set_speed`, `inspect_native`, and `set_native("scene_speed", ...)`.
+- Per-device **Idle Bluetooth disconnect delay** (`idle_disconnect_seconds`, `0..600`, default `0`): persistent link when `0`, automatic idle disconnect after delay and seamless reconnect on next command, timer reset across rapid commands, protection of active `_diy_transfer_client` transfers, explicit `disconnect()` timer cleanup, `HelloFairyOptionsFlow` bounds/persistence, coordinator wiring, and diagnostics reporting (`transport.idle_disconnect_seconds`).
+
+Physical hardware confirmation for universal `0x0C` speed slider behavior across non-curtain models (PR #12) and for **Idle Bluetooth disconnect delay** on flickering strip hardware (#8) awaits user testing.
 
 ## Automated checks (2.1.0)
 

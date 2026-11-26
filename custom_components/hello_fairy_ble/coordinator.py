@@ -16,7 +16,11 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util.hass_dict import HassKey
 
 from .api import HelloFairyAPI, HelloFairyConnectionPool
-from .const import DOMAIN
+from .const import (
+    CONF_IDLE_DISCONNECT_SECONDS,
+    DEFAULT_IDLE_DISCONNECT_SECONDS,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 CONNECTION_POOL_KEY: HassKey[HelloFairyConnectionPool] = HassKey(f"{DOMAIN}_connection_pool")
@@ -31,6 +35,7 @@ class HelloFairyApiData:
     color: tuple[int, int, int] | None = None  # RGB (0-255)
     hsv: tuple[int, int, int] | None = None  # H(0-359), S(0-100), V(0-100)
     current_preset: int | None = None
+    current_speed: int | None = None
     mode: int | None = None  # 1=color, 2=preset, 3=music
     available_effects: list[str] | None = None
 
@@ -58,6 +63,9 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
             self._async_push_data,
             connection_pool=pool,
             ble_device_callback=self._get_ble_device,
+            idle_disconnect_seconds=config_entry.options.get(
+                CONF_IDLE_DISCONNECT_SECONDS, DEFAULT_IDLE_DISCONNECT_SECONDS
+            ),
         )
 
         # Initialize DataUpdateCoordinator
@@ -110,6 +118,7 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
                 color=self._api.color,
                 hsv=self._api.hsv,
                 current_preset=self._api.current_preset,
+                current_speed=self._api.current_speed,
                 mode=self._api.mode,
                 available_effects=self._api.available_effects,
             )
@@ -124,6 +133,7 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
             color=self._api.color,
             hsv=self._api.hsv,
             current_preset=self._api.current_preset,
+            current_speed=self._api.current_speed,
             mode=self._api.mode,
             available_effects=self._api.available_effects,
         )
@@ -147,6 +157,10 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
     async def set_preset(self, preset: int, *, brightness: int | None = None):
         """Set preset effect."""
         await self._api.set_preset(preset, brightness=brightness)
+
+    async def set_speed(self, speed: int) -> None:
+        """Set preset speed (0-100)."""
+        await self._api.set_speed(speed)
 
     async def set_effect(self, effect_name: str, *, brightness: int | None = None):
         """Set effect by name."""
@@ -182,7 +196,9 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
         return await self._api.request_status()
 
     async def inspect_native(self) -> dict:
-        return await self._api.inspect_native()
+        result = await self._api.inspect_native()
+        self._async_push_data()
+        return result
 
     async def set_native(self, action: str, payload: dict) -> dict:
         result = await self._api.set_native(action, payload)

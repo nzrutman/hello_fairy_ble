@@ -35,7 +35,9 @@ from .const import (
     CMD_COLOR_PRESET,
     CMD_POWER,
     CMD_PREFIX,
+    CMD_SPEED,
     COMMAND_CHARACTERISTIC_UUID,
+    DEFAULT_IDLE_DISCONNECT_SECONDS,
     EFFECT_PRESETS,
     MODE_COLOR,
     MODE_PRESET,
@@ -44,7 +46,7 @@ from .const import (
 from .diy_controls import build_playback_commands, decode_device_info, decode_status
 from .native import NativeControls
 from .native_capabilities import decode_extensions
-from .native_effects import decode_music_status
+from .native_effects import decode_music_status, decode_scene_speed
 from .pixel_protocol import (
     PIXEL_COUNT,
     PIXEL_OFF,
@@ -59,7 +61,7 @@ from .pixel_protocol import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PATCH_VERSION = "2.1.0"
+PATCH_VERSION = "2.1.1"
 PIXEL_WRITE_DELAY = 0.30  # Capture: successive DA writes 298..309 ms apart.
 DRAW_MODE_SETTLE_DELAY = 0.25  # Capture: D0(00) to first DA = 250.990 ms.
 CACHE_REFRESH_SETTLE_DELAY = 1.5  # Allow peripheral/proxy to resume advertising after disconnect.
@@ -75,9 +77,15 @@ _ACTIVITY_SEQ = itertools.count(1)
 class _CommandLock(asyncio.Lock):
     """Serialize commands on one device and wake slot waiters when released."""
 
-    def __init__(self, on_release: Callable[[], None]) -> None:
+    def __init__(self, on_acquire: Callable[[], None], on_release: Callable[[], None]) -> None:
         super().__init__()
+        self._on_acquire = on_acquire
         self._on_release = on_release
+
+    async def acquire(self) -> bool:
+        result = await super().acquire()
+        self._on_acquire()
+        return result
 
     def release(self) -> None:
         super().release()
@@ -192,6 +200,7 @@ class HelloFairyAPI(NativeControls):
         *,
         connection_pool: HelloFairyConnectionPool | None = None,
         ble_device_callback: Callable[[], BLEDevice | None] | None = None,
+        idle_disconnect_seconds: float = DEFAULT_IDLE_DISCONNECT_SECONDS,
     ) -> None:
         """Initialize Hello Fairy API.
 
@@ -200,6 +209,7 @@ class HelloFairyAPI(NativeControls):
             update_callback: Callback function for device state updates
             connection_pool: Optional shared BLE connection slot pool
             ble_device_callback: Optional callback returning the best connectable BLEDevice
+            idle_disconnect_seconds: Seconds of inactivity before closing BLE link (0 disables)
         """
         self._ble_device = ble_device
         self._ble_device_callback = ble_device_callback
@@ -211,6 +221,9 @@ class HelloFairyAPI(NativeControls):
         # silently open another connection while the old one is unaccounted for.
         self._cleanup_pending: BleakClient | None = None
         self._connection_pool = connection_pool
+        self._idle_disconnect_seconds: float = max(0.0, float(idle_disconnect_seconds))
+        self._idle_disconnect_handle: asyncio.TimerHandle | None = None
+        self._idle_disconnect_task: asyncio.Task[None] | None = None
         self._last_used: float = 0.0
         self._last_used_seq: int = 0
         _LOGGER.info("Hello Fairy API %s loaded", PATCH_VERSION)
@@ -219,7 +232,7 @@ class HelloFairyAPI(NativeControls):
         # Serialize GATT writes. This is especially important for full-frame DIY
         # uploads, which consist of many DA writes and must not be interleaved
         # with power/color/preset commands.
-        self._command_lock = _CommandLock(self._on_command_released)
+        self._command_lock = _CommandLock(self._on_command_acquired, self._on_command_released)
         if connection_pool is not None:
             connection_pool.register(self)
         self._init_native()
@@ -245,6 +258,7 @@ class HelloFairyAPI(NativeControls):
         self.color: tuple[int, int, int] | None = None  # RGB (0-255)
         self.hsv: tuple[int, int, int] | None = None  # H(0-359), S(0-100), V(0-100)
         self.current_preset: int | None = None
+        self.current_speed: int | None = None
         self.mode: int | None = None  # 1=color, 2=preset, 3=music
         self.available_effects = list(EFFECT_PRESETS.keys())
 
@@ -271,6 +285,59 @@ class HelloFairyAPI(NativeControls):
             and self._diy_transfer_client is None
         )
 
+    @property
+    def idle_disconnect_seconds(self) -> float:
+        """Return configured idle BLE disconnect delay in seconds (0 disables)."""
+        return self._idle_disconnect_seconds
+
+    def _cancel_idle_disconnect_timer(self) -> None:
+        if self._idle_disconnect_handle is not None:
+            self._idle_disconnect_handle.cancel()
+            self._idle_disconnect_handle = None
+
+    def _on_command_acquired(self) -> None:
+        self._cancel_idle_disconnect_timer()
+
+    def _schedule_idle_disconnect(self) -> None:
+        self._cancel_idle_disconnect_timer()
+        if (
+            self._idle_disconnect_seconds <= 0
+            or not self.has_active_connection
+            or self._command_lock.locked()
+            or self._diy_transfer_client is not None
+        ):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._idle_disconnect_handle = loop.call_later(
+            self._idle_disconnect_seconds, self._start_idle_disconnect_task
+        )
+
+    def _start_idle_disconnect_task(self) -> None:
+        self._idle_disconnect_handle = None
+        if not self.is_idle_for_eviction or (
+            self._idle_disconnect_task is not None and not self._idle_disconnect_task.done()
+        ):
+            return
+        self._idle_disconnect_task = asyncio.create_task(self._run_idle_disconnect())
+
+    async def _run_idle_disconnect(self) -> None:
+        try:
+            if await self.disconnect_if_idle():
+                _LOGGER.debug(
+                    "%s idle BLE disconnect completed after %.1fs for %s",
+                    PATCH_VERSION,
+                    self._idle_disconnect_seconds,
+                    self.address,
+                )
+        except (BleakError, TimeoutError) as err:
+            _LOGGER.debug("Idle BLE disconnect failed for %s: %s", self.address, err)
+        finally:
+            if self._idle_disconnect_task is asyncio.current_task():
+                self._idle_disconnect_task = None
+
     def _touch_used(self) -> None:
         self._last_used = time.monotonic()
         self._last_used_seq = next(_ACTIVITY_SEQ)
@@ -278,6 +345,9 @@ class HelloFairyAPI(NativeControls):
     def _on_command_released(self) -> None:
         if self.has_active_connection:
             self._touch_used()
+            self._schedule_idle_disconnect()
+        else:
+            self._cancel_idle_disconnect_timer()
         if self._connection_pool is not None:
             self._connection_pool.notify_changed()
 
@@ -320,6 +390,7 @@ class HelloFairyAPI(NativeControls):
 
     async def _disconnect_transport_locked(self) -> None:
         """Invalidate verification and release the owned client, even after setup failure."""
+        self._cancel_idle_disconnect_timer()
         client = self._client if self._client is not None else self._cleanup_pending
         self._client = None
         self._verified_diy_client = None
@@ -449,6 +520,8 @@ class HelloFairyAPI(NativeControls):
 
             await subscribed_client.start_notify(NOTIFY_CHARACTERISTIC_UUID, notification)
             self._touch_used()
+            if not self._command_lock.locked():
+                self._schedule_idle_disconnect()
         except asyncio.CancelledError:
             if self._client is not None:
                 try:
@@ -525,12 +598,12 @@ class HelloFairyAPI(NativeControls):
             if expect_ack:
                 self._expected_ack_cmd = None
 
-    async def _send_command(self, command: list[int]) -> None:
-        """Send an existing AA-prefixed command and wait for its ACK."""
+    async def _send_command(self, command: list[int], expect_ack: bool = True) -> None:
+        """Send an existing AA-prefixed command and optionally wait for its ACK."""
         # Calculate and append checksum
         packet = bytes([*command, self._calculate_checksum(command)])
         async with self._command_lock:
-            await self._write_packet_locked(packet, expect_ack=True)
+            await self._write_packet_locked(packet, expect_ack=expect_ack)
 
     async def _handle_notification(self, characteristic: BleakGATTCharacteristic, data: bytearray):
         """Handle notifications from Hello Fairy device."""
@@ -549,15 +622,21 @@ class HelloFairyAPI(NativeControls):
             self._update_callback()
             return
 
-        if self._handle_native_notification(bytes(data)):
+        raw = bytes(data)
+        if self._handle_native_notification(raw):
             return
-        info = decode_device_info(bytes(data))
+        speed = decode_scene_speed(raw)
+        if speed is not None:
+            self.current_speed = speed
+            self._update_callback()
+            return
+        info = decode_device_info(raw)
         if info is not None:
             if self._native_client is not self._client:
                 self._reset_native_session()
                 self._native_client = self._client
             self._device_info = info
-            self._native_extensions = decode_extensions(bytes(data))
+            self._native_extensions = decode_extensions(raw)
             self._info_client = self._client
             self._info_event.set()
             return
@@ -570,10 +649,10 @@ class HelloFairyAPI(NativeControls):
         ) == (400, 20, 20, 3)
         # Preserve legacy device scaling unless this exact link reported the
         # known curtain profile. Studio and the HA entity share this decoder.
-        report = decode_status(bytes(data), scene_divisor=1 if curtain_units else 10)
+        report = decode_status(raw, scene_divisor=1 if curtain_units else 10)
         if report is None:
             return
-        music = decode_music_status(bytes(data))
+        music = decode_music_status(raw)
         if report.get("mode") == 3 and curtain_units and music is None:
             return
         if music is not None:
@@ -727,6 +806,21 @@ class HelloFairyAPI(NativeControls):
         # Clear color state when in preset mode
         self.color = None
         self.hsv = None
+
+    async def set_speed(self, speed: int) -> None:
+        """Set preset speed (0-100)."""
+        if not self.state:
+            await self.set_power(True)
+            await asyncio.sleep(0.1)
+
+        speed = max(0, min(100, int(speed)))
+
+        command = [CMD_PREFIX, CMD_SPEED, 0x01, speed]
+        await self._send_command(command, expect_ack=False)
+
+        # Update state immediately (command 0x0C does not emit a 4-byte ACK)
+        self.current_speed = speed
+        self._update_callback()
 
     async def set_effect(self, effect_name: str, *, brightness: int | None = None):
         """Set effect by name."""
@@ -1163,5 +1257,9 @@ class HelloFairyAPI(NativeControls):
 
     async def disconnect(self) -> None:
         """Disconnect from the device."""
+        self._cancel_idle_disconnect_timer()
         async with self._command_lock:
             await self._disconnect_transport_locked()
+        task = self._idle_disconnect_task
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            await asyncio.gather(task, return_exceptions=True)
