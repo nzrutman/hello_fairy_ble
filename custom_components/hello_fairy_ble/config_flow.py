@@ -7,17 +7,30 @@ from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
     async_discovered_service_info,
 )
-from homeassistant.config_entries import ConfigFlow
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
+from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 
-from .const import DISCOVERY_NAMES, DOMAIN
+from .const import (
+    CONF_IDLE_DISCONNECT_SECONDS,
+    DEFAULT_IDLE_DISCONNECT_SECONDS,
+    DISCOVERY_NAMES,
+    DOMAIN,
+    MAX_IDLE_DISCONNECT_SECONDS,
+)
 
 
 class HelloFairyConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle Hello Fairy config flow."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> HelloFairyOptionsFlow:
+        """Return the options flow for this handler."""
+        return HelloFairyOptionsFlow()
 
     def __init__(self) -> None:
         """Initialize the config flow."""
@@ -83,4 +96,35 @@ class HelloFairyConfigFlow(ConfigFlow, domain=DOMAIN):
                 "name": discovery_info.name,
                 "address": discovery_info.address,
             },
+        )
+
+
+class HelloFairyOptionsFlow(OptionsFlow):
+    """Handle Hello Fairy device options."""
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Manage device options."""
+        if user_input is not None:
+            return self.async_create_entry(
+                title="",
+                data={
+                    CONF_IDLE_DISCONNECT_SECONDS: int(user_input[CONF_IDLE_DISCONNECT_SECONDS]),
+                },
+            )
+
+        current_delay = int(
+            self.config_entry.options.get(
+                CONF_IDLE_DISCONNECT_SECONDS, DEFAULT_IDLE_DISCONNECT_SECONDS
+            )
+        )
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_IDLE_DISCONNECT_SECONDS, default=current_delay): vol.All(
+                        vol.Coerce(int),
+                        vol.Range(min=0, max=MAX_IDLE_DISCONNECT_SECONDS),
+                    )
+                }
+            ),
         )

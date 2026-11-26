@@ -18,6 +18,17 @@
             "no_devices_found": "Keine Hello Fairy Geräte gefunden"
         }
     },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Hello Fairy Geräteoptionen",
+                "description": "Legen Sie eine Inaktivitätsverzögerung für die Bluetooth-Trennung (in Sekunden) fest, um die BLE-Verbindung nach Befehlen zu schließen. 0 lässt die Verbindung dauerhaft geöffnet (Standard). Werte wie 3–10 Sekunden können LED-Streifen-Flackern durch dauerhafte BLE-Verbindungspakete beheben.",
+                "data": {
+                    "idle_disconnect_seconds": "Verzögerung bis zur Bluetooth-Trennung bei Inaktivität (Sekunden)"
+                }
+            }
+        }
+    },
     "entity": {
         "button": {
             "refresh_status": {

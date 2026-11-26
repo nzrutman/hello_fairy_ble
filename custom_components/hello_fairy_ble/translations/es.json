@@ -18,6 +18,17 @@
             "no_devices_found": "No se encontraron dispositivos Hello Fairy"
         }
     },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Opciones del dispositivo Hello Fairy",
+                "description": "Establece un retraso de desconexión Bluetooth por inactividad (en segundos) para cerrar la conexión BLE después de enviar comandos. 0 mantiene la conexión abierta (predeterminado). Valores como 3–10 segundos pueden evitar el parpadeo en tiras LED causado por mantener la conexión BLE activa.",
+                "data": {
+                    "idle_disconnect_seconds": "Retraso de desconexión Bluetooth por inactividad (segundos)"
+                }
+            }
+        }
+    },
     "entity": {
         "button": {
             "refresh_status": {

@@ -37,6 +37,7 @@ from .const import (
     CMD_PREFIX,
     CMD_SPEED,
     COMMAND_CHARACTERISTIC_UUID,
+    DEFAULT_IDLE_DISCONNECT_SECONDS,
     EFFECT_PRESETS,
     MODE_COLOR,
     MODE_PRESET,
@@ -76,9 +77,15 @@ _ACTIVITY_SEQ = itertools.count(1)
 class _CommandLock(asyncio.Lock):
     """Serialize commands on one device and wake slot waiters when released."""
 
-    def __init__(self, on_release: Callable[[], None]) -> None:
+    def __init__(self, on_acquire: Callable[[], None], on_release: Callable[[], None]) -> None:
         super().__init__()
+        self._on_acquire = on_acquire
         self._on_release = on_release
+
+    async def acquire(self) -> bool:
+        result = await super().acquire()
+        self._on_acquire()
+        return result
 
     def release(self) -> None:
         super().release()
@@ -193,6 +200,7 @@ class HelloFairyAPI(NativeControls):
         *,
         connection_pool: HelloFairyConnectionPool | None = None,
         ble_device_callback: Callable[[], BLEDevice | None] | None = None,
+        idle_disconnect_seconds: float = DEFAULT_IDLE_DISCONNECT_SECONDS,
     ) -> None:
         """Initialize Hello Fairy API.
 
@@ -201,6 +209,7 @@ class HelloFairyAPI(NativeControls):
             update_callback: Callback function for device state updates
             connection_pool: Optional shared BLE connection slot pool
             ble_device_callback: Optional callback returning the best connectable BLEDevice
+            idle_disconnect_seconds: Seconds of inactivity before closing BLE link (0 disables)
         """
         self._ble_device = ble_device
         self._ble_device_callback = ble_device_callback
@@ -212,6 +221,9 @@ class HelloFairyAPI(NativeControls):
         # silently open another connection while the old one is unaccounted for.
         self._cleanup_pending: BleakClient | None = None
         self._connection_pool = connection_pool
+        self._idle_disconnect_seconds: float = max(0.0, float(idle_disconnect_seconds))
+        self._idle_disconnect_handle: asyncio.TimerHandle | None = None
+        self._idle_disconnect_task: asyncio.Task[None] | None = None
         self._last_used: float = 0.0
         self._last_used_seq: int = 0
         _LOGGER.info("Hello Fairy API %s loaded", PATCH_VERSION)
@@ -220,7 +232,7 @@ class HelloFairyAPI(NativeControls):
         # Serialize GATT writes. This is especially important for full-frame DIY
         # uploads, which consist of many DA writes and must not be interleaved
         # with power/color/preset commands.
-        self._command_lock = _CommandLock(self._on_command_released)
+        self._command_lock = _CommandLock(self._on_command_acquired, self._on_command_released)
         if connection_pool is not None:
             connection_pool.register(self)
         self._init_native()
@@ -273,6 +285,59 @@ class HelloFairyAPI(NativeControls):
             and self._diy_transfer_client is None
         )
 
+    @property
+    def idle_disconnect_seconds(self) -> float:
+        """Return configured idle BLE disconnect delay in seconds (0 disables)."""
+        return self._idle_disconnect_seconds
+
+    def _cancel_idle_disconnect_timer(self) -> None:
+        if self._idle_disconnect_handle is not None:
+            self._idle_disconnect_handle.cancel()
+            self._idle_disconnect_handle = None
+
+    def _on_command_acquired(self) -> None:
+        self._cancel_idle_disconnect_timer()
+
+    def _schedule_idle_disconnect(self) -> None:
+        self._cancel_idle_disconnect_timer()
+        if (
+            self._idle_disconnect_seconds <= 0
+            or not self.has_active_connection
+            or self._command_lock.locked()
+            or self._diy_transfer_client is not None
+        ):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._idle_disconnect_handle = loop.call_later(
+            self._idle_disconnect_seconds, self._start_idle_disconnect_task
+        )
+
+    def _start_idle_disconnect_task(self) -> None:
+        self._idle_disconnect_handle = None
+        if not self.is_idle_for_eviction or (
+            self._idle_disconnect_task is not None and not self._idle_disconnect_task.done()
+        ):
+            return
+        self._idle_disconnect_task = asyncio.create_task(self._run_idle_disconnect())
+
+    async def _run_idle_disconnect(self) -> None:
+        try:
+            if await self.disconnect_if_idle():
+                _LOGGER.debug(
+                    "%s idle BLE disconnect completed after %.1fs for %s",
+                    PATCH_VERSION,
+                    self._idle_disconnect_seconds,
+                    self.address,
+                )
+        except (BleakError, TimeoutError) as err:
+            _LOGGER.debug("Idle BLE disconnect failed for %s: %s", self.address, err)
+        finally:
+            if self._idle_disconnect_task is asyncio.current_task():
+                self._idle_disconnect_task = None
+
     def _touch_used(self) -> None:
         self._last_used = time.monotonic()
         self._last_used_seq = next(_ACTIVITY_SEQ)
@@ -280,6 +345,9 @@ class HelloFairyAPI(NativeControls):
     def _on_command_released(self) -> None:
         if self.has_active_connection:
             self._touch_used()
+            self._schedule_idle_disconnect()
+        else:
+            self._cancel_idle_disconnect_timer()
         if self._connection_pool is not None:
             self._connection_pool.notify_changed()
 
@@ -322,6 +390,7 @@ class HelloFairyAPI(NativeControls):
 
     async def _disconnect_transport_locked(self) -> None:
         """Invalidate verification and release the owned client, even after setup failure."""
+        self._cancel_idle_disconnect_timer()
         client = self._client if self._client is not None else self._cleanup_pending
         self._client = None
         self._verified_diy_client = None
@@ -451,6 +520,8 @@ class HelloFairyAPI(NativeControls):
 
             await subscribed_client.start_notify(NOTIFY_CHARACTERISTIC_UUID, notification)
             self._touch_used()
+            if not self._command_lock.locked():
+                self._schedule_idle_disconnect()
         except asyncio.CancelledError:
             if self._client is not None:
                 try:
@@ -1186,5 +1257,9 @@ class HelloFairyAPI(NativeControls):
 
     async def disconnect(self) -> None:
         """Disconnect from the device."""
+        self._cancel_idle_disconnect_timer()
         async with self._command_lock:
             await self._disconnect_transport_locked()
+        task = self._idle_disconnect_task
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            await asyncio.gather(task, return_exceptions=True)

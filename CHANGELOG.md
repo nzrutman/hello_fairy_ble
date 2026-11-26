@@ -9,6 +9,7 @@
   - Preserve speed `0` in `native_value` instead of treating `0` as falsy/`unknown`.
   - Push coordinator state immediately after sending command `0x0C` (`expect_ack=False`, since `0x0C` does not emit a 4-byte ACK) and refresh `current_speed` from `0x0C` device notifications or Curtain Studio native inspection without weakening `native.py`'s session capability gate.
   - Use `mdi:speedometer`, gate availability on `device_discovered`, validate range before stopping active Studio playlists, add German and Spanish entity translations, and add unit/HA integration tests.
+- Add a per-device **Idle Bluetooth disconnect delay** option (`0–600` seconds, default `0` to stay connected) under **Configure** so LED strip controllers that flicker while holding an active BLE link (#8) can automatically close the connection after commands finish and free the BLE link for phone-app/remote use.
 
 ## 2.1.0
 

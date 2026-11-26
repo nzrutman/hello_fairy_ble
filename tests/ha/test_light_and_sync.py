@@ -10,6 +10,7 @@ from bleak.backends.device import BLEDevice
 from homeassistant.components.number import NumberMode
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import EntityCategory
+from homeassistant.data_entry_flow import FlowResultType, InvalidData
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -26,6 +27,7 @@ from custom_components.hello_fairy_ble.coordinator import (
     HelloFairyApiData,
     HelloFairyCoordinator,
 )
+from custom_components.hello_fairy_ble.diagnostics import async_get_config_entry_diagnostics
 from custom_components.hello_fairy_ble.light import HelloFairyLight
 from custom_components.hello_fairy_ble.number import (
     HelloFairyPresetNumber,
@@ -419,4 +421,53 @@ async def test_coordinator_set_speed_and_native_sync_push_data(hass):
             assert notifications[-1] == 70
         finally:
             unsub()
+            await coordinator.async_shutdown()
+
+
+async def test_options_flow_idle_disconnect_wires_coordinator_and_diagnostics(hass):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Test Strip",
+        unique_id=ADDRESS,
+        data={"address": ADDRESS, "name": "Test Strip"},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+
+    with pytest.raises(InvalidData):
+        await hass.config_entries.options.async_configure(
+            result["flow_id"], user_input={"idle_disconnect_seconds": -1}
+        )
+    with pytest.raises(InvalidData):
+        await hass.config_entries.options.async_configure(
+            result["flow_id"], user_input={"idle_disconnect_seconds": 601}
+        )
+
+    configured = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input={"idle_disconnect_seconds": 5}
+    )
+    assert configured["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["idle_disconnect_seconds"] == 5
+
+    with (
+        patch(
+            "custom_components.hello_fairy_ble.coordinator.bluetooth.async_ble_device_from_address",
+            return_value=None,
+        ),
+        patch(
+            "custom_components.hello_fairy_ble.coordinator.bluetooth.async_register_callback",
+            return_value=Mock(),
+        ),
+    ):
+        coordinator = HelloFairyCoordinator(hass, entry)
+        try:
+            assert coordinator._api.idle_disconnect_seconds == 5.0
+            entry.runtime_data = integration.RuntimeData(coordinator, Mock())
+            diag = await async_get_config_entry_diagnostics(hass, entry)
+            assert diag["transport"]["idle_disconnect_seconds"] == 5.0
+        finally:
+            entry.runtime_data = None
             await coordinator.async_shutdown()

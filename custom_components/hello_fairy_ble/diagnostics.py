@@ -40,6 +40,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
         "capacity_verified_on_current_client": bool(
             client is not None and getattr(api, "_verified_diy_client", None) is client
         ),
+        "idle_disconnect_seconds": getattr(api, "idle_disconnect_seconds", 0),
         "note": "Cached metadata only; no new BLE query or physical confirmation",
     }
     return result

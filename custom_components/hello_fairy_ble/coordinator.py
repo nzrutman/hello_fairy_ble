@@ -16,7 +16,11 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util.hass_dict import HassKey
 
 from .api import HelloFairyAPI, HelloFairyConnectionPool
-from .const import DOMAIN
+from .const import (
+    CONF_IDLE_DISCONNECT_SECONDS,
+    DEFAULT_IDLE_DISCONNECT_SECONDS,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 CONNECTION_POOL_KEY: HassKey[HelloFairyConnectionPool] = HassKey(f"{DOMAIN}_connection_pool")
@@ -59,6 +63,9 @@ class HelloFairyCoordinator(DataUpdateCoordinator[HelloFairyApiData]):
             self._async_push_data,
             connection_pool=pool,
             ble_device_callback=self._get_ble_device,
+            idle_disconnect_seconds=config_entry.options.get(
+                CONF_IDLE_DISCONNECT_SECONDS, DEFAULT_IDLE_DISCONNECT_SECONDS
+            ),
         )
 
         # Initialize DataUpdateCoordinator

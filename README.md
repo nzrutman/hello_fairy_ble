@@ -54,6 +54,7 @@ Once configured, your Hello Fairy lights will appear as a light entity in Home A
 - **Preset**: There is also a separate numerical control to select any of the full range of effects by number
 - **Speed**: A numerical slider (0–100) to adjust preset animation speed (command `0x0C`)
 - **Refresh status**: A diagnostic button entity (and `hello_fairy_ble.refresh_status` action) lets you explicitly request current device status (`AA 01 00 AB`) without startup or background polling
+- **Idle Bluetooth disconnect delay**: Per-device **Configure** option (`0–600` seconds, default `0` to stay connected) that closes the BLE connection after commands finish for strips sensitive to persistent BLE connections or to free the link for the phone app
 
 ### Available Effects
 
@@ -176,6 +177,13 @@ logger:
 1. Make sure the device is turned on before applying effects
 2. Some effects may take a moment to activate
 3. Try switching between color mode and effect mode
+
+### Light Flickering While Connected
+
+Some addressable LED strip controllers flicker or show random colors on the second half of the strip while Home Assistant holds the Bluetooth Low Energy connection open (and stop as soon as the integration is disabled/disconnected):
+
+1. Open **Settings → Devices & services → Hello Fairy Bluetooth Lights → Configure** on that device and set **Idle Bluetooth disconnect delay** to `3`–`10` seconds so Home Assistant disconnects cleanly after sending commands.
+2. If you use an onboard Bluetooth adapter on a Linux/SBC host, switching to an **ESPHome Bluetooth Proxy** (with `esp-idf`) can also provide cleaner BLE connection timing.
 
 ## Contributing
 
